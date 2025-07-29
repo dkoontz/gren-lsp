@@ -30,9 +30,9 @@ Thumbs.db
 .env.local
 
 # VS Code Extension (when we add it)
-/editors/vscode/out/
-/editors/vscode/node_modules/
-/editors/vscode/*.vsix
+/editor-extensions/vscode/out/
+/editor-extensions/vscode/node_modules/
+/editor-extensions/vscode/*.vsix
 
 # Test coverage
 *.profraw
