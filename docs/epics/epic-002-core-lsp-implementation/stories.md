@@ -4,12 +4,12 @@
 **Description:** Set up tree-sitter with the Gren grammar for incremental parsing of source files.
 
 **Acceptance Criteria:**
-- [ ] Add tree-sitter and tree-sitter-gren dependencies
-- [ ] Create parser initialization with Gren grammar
-- [ ] Implement parse_file function returning tree-sitter AST
-- [ ] Handle parse errors gracefully
-- [ ] Set up incremental parsing for file changes
-- [ ] Add performance benchmarks for parsing
+- [x] Add tree-sitter and tree-sitter-gren dependencies
+- [x] Create parser initialization with Gren grammar
+- [x] Implement parse_file function returning tree-sitter AST
+- [x] Handle parse errors gracefully
+- [x] Set up incremental parsing for file changes
+- [x] Add performance benchmarks for parsing
 
 **Technical Notes:**
 - May need to contribute to tree-sitter-gren for missing features

@@ -6,6 +6,6 @@ pub mod workspace;
 
 pub use analysis::AnalysisEngine;
 pub use document::Document;
-pub use parser::Parser;
+pub use parser::{Parser, ParseError};
 pub use symbol::{Symbol, SymbolIndex};
 pub use workspace::Workspace;

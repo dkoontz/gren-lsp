@@ -24,6 +24,10 @@ tree-sitter.workspace = true
 url = "2.4.1"
 pathdiff = "0.2.1"
 
+# Tree-sitter Gren grammar
+tree-sitter-gren = { git = "https://github.com/MaeBrooks/tree-sitter-gren", branch = "main" }
+
 [dev-dependencies]
 mockall.workspace = true
 proptest.workspace = true
+criterion.workspace = true
