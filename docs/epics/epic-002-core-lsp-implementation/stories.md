@@ -36,12 +36,12 @@
 **Description:** Report syntax errors from tree-sitter parsing as LSP diagnostics.
 
 **Acceptance Criteria:**
-- [ ] Extract error nodes from tree-sitter parse tree
-- [ ] Convert parse errors to LSP Diagnostic format
-- [ ] Publish diagnostics via textDocument/publishDiagnostics
-- [ ] Clear diagnostics when errors are fixed
-- [ ] Include helpful error messages
-- [ ] Report error ranges accurately
+- [x] Extract error nodes from tree-sitter parse tree
+- [x] Convert parse errors to LSP Diagnostic format
+- [x] Publish diagnostics via textDocument/publishDiagnostics
+- [x] Clear diagnostics when errors are fixed
+- [x] Include helpful error messages
+- [x] Report error ranges accurately
 
 **Technical Notes:**
 - Batch diagnostic updates for performance
@@ -52,17 +52,34 @@
 **Description:** Extract symbols (functions, types, modules) from parsed AST for indexing.
 
 **Acceptance Criteria:**
-- [ ] Create tree-sitter queries for Gren symbols
-- [ ] Extract function definitions with signatures
-- [ ] Identify type definitions and aliases
-- [ ] Capture module declarations and imports
-- [ ] Store symbols in SQLite database
-- [ ] Update symbols on file changes
+- [x] Create tree-sitter queries for Gren symbols
+- [x] Extract function definitions with signatures
+- [x] Identify type definitions and aliases
+- [x] Capture module declarations and imports
+- [x] Store symbols in SQLite database
+- [x] Update symbols on file changes
 
 **Technical Notes:**
 - Design efficient tree-sitter query patterns
 - Handle nested symbols correctly
 - Maintain symbol relationships
+
+## Story 2.4.1: Implement LSP Symbol Protocol Methods
+**Description:** Expose extracted symbols to LSP clients through standard protocol methods.
+
+**Acceptance Criteria:**
+- [ ] Implement textDocument/documentSymbol for file outline view
+- [ ] Implement workspace/symbol for global symbol search
+- [ ] Return hierarchical symbols with proper nesting
+- [ ] Include symbol kinds, ranges, and selection ranges
+- [ ] Support symbol filtering and search queries
+- [ ] Handle symbol icons and descriptions in VS Code
+
+**Technical Notes:**
+- Convert internal Symbol format to LSP DocumentSymbol/SymbolInformation
+- Implement symbol hierarchy for nested types and modules
+- Optimize for VS Code Outline panel and Ctrl+T search
+- Consider symbol caching for performance
 
 ## Story 2.5: Enable Basic Code Completion
 **Description:** Provide code completion for symbols in the current file and imported modules.
@@ -116,10 +133,10 @@
 **Description:** Build and maintain a searchable index of all symbols in the workspace.
 
 **Acceptance Criteria:**
-- [ ] Index all Gren files on workspace initialization
-- [ ] Update index on file changes
-- [ ] Store symbols with metadata in SQLite
-- [ ] Implement efficient symbol search queries
+- [x] Index all Gren files on workspace initialization
+- [x] Update index on file changes
+- [x] Store symbols with metadata in SQLite
+- [x] Implement efficient symbol search queries
 - [ ] Handle workspace folder changes
 - [ ] Provide progress reporting for indexing
 
