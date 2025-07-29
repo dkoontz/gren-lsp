@@ -14,10 +14,10 @@ add x y = x + y
 
     let mut parser = Parser::new()?;
     let tree = parser.parse(gren_source)?.unwrap();
-    
+
     println!("=== Tree-sitter AST Structure ===");
     print_tree(&tree.root_node(), gren_source.as_bytes(), 0);
-    
+
     Ok(())
 }
 
@@ -29,9 +29,9 @@ fn print_tree(node: &tree_sitter::Node, source: &[u8], depth: usize) {
     } else {
         node_text.replace('\n', "\\n").replace('\r', "")
     };
-    
+
     println!("{}({}) \"{}\"", indent, node.kind(), node_text_short);
-    
+
     // Only recurse for non-leaf nodes to avoid too much output
     if node.child_count() > 0 {
         let mut cursor = node.walk();

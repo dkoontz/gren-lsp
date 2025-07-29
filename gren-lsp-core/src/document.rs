@@ -1,4 +1,4 @@
-use crate::{Parser, ParseError};
+use crate::{ParseError, Parser};
 use anyhow::Result;
 use lsp_textdocument::FullTextDocument;
 use lsp_types::*;
@@ -22,8 +22,8 @@ impl Document {
             text_document_item.text,
         );
 
-        Self { 
-            text_document, 
+        Self {
+            text_document,
             uri,
             parse_tree: None,
             last_parsed: None,
@@ -46,10 +46,10 @@ impl Document {
     pub fn apply_changes(&mut self, changes: Vec<TextDocumentContentChangeEvent>) -> Result<()> {
         let new_version = self.version() + 1;
         self.text_document.update(&changes, new_version);
-        
+
         // Invalidate parse tree when content changes
         self.invalidate_parse_tree();
-        
+
         Ok(())
     }
 
@@ -64,11 +64,14 @@ impl Document {
     /// Get the current parse tree, parsing if necessary
     pub fn get_parse_tree(&mut self, parser: &mut Parser) -> Result<Option<&Tree>> {
         use tracing::info;
-        
+
         let has_tree = self.parse_tree.is_some();
         let needs_reparse = self.needs_reparse();
-        info!("get_parse_tree: has_tree={}, needs_reparse={}", has_tree, needs_reparse);
-        
+        info!(
+            "get_parse_tree: has_tree={}, needs_reparse={}",
+            has_tree, needs_reparse
+        );
+
         if self.parse_tree.is_none() || needs_reparse {
             info!("Triggering reparse...");
             self.reparse(parser)?;
@@ -81,10 +84,10 @@ impl Document {
     /// Force a reparse of the document
     pub fn reparse(&mut self, parser: &mut Parser) -> Result<()> {
         use tracing::info;
-        
+
         let source = self.text();
         info!("Reparsing document, source length: {} bytes", source.len());
-        
+
         // TEMPORARY: Always use full parsing to avoid incremental parsing issues
         // TODO: Fix incremental parsing later for better performance
         info!("Using full parsing (incremental parsing temporarily disabled)");
@@ -94,7 +97,7 @@ impl Document {
             // Extract parse errors with source text for better error messages
             self.parse_errors = Parser::extract_errors_with_source(&tree, source);
             info!("Parse completed: {} errors found", self.parse_errors.len());
-            
+
             self.parse_tree = Some(tree);
             self.last_parsed = Some(Instant::now());
         } else {

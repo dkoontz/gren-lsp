@@ -1,11 +1,11 @@
-use lsp_types::{Diagnostic, DiagnosticSeverity, Position, Range};
 use crate::parser::ParseError;
+use lsp_types::{Diagnostic, DiagnosticSeverity, Position, Range};
 
 /// Converts tree-sitter parse errors to LSP diagnostics
 pub fn parse_errors_to_diagnostics(errors: Vec<ParseError>) -> Vec<Diagnostic> {
     // Deduplicate and merge overlapping errors
     let deduplicated_errors = deduplicate_errors(errors);
-    
+
     deduplicated_errors
         .into_iter()
         .map(|error| {
@@ -25,7 +25,7 @@ pub fn parse_errors_to_diagnostics(errors: Vec<ParseError>) -> Vec<Diagnostic> {
             Diagnostic::new(
                 range,
                 Some(DiagnosticSeverity::ERROR),
-                None, // code
+                None,                         // code
                 Some("gren-lsp".to_string()), // source
                 message,
                 None, // related_information
@@ -40,10 +40,13 @@ fn deduplicate_errors(mut errors: Vec<ParseError>) -> Vec<ParseError> {
     if errors.is_empty() {
         return errors;
     }
-    
+
     // Sort by start position, then by length (larger errors first)
     errors.sort_by(|a, b| {
-        let pos_cmp = a.start_position.row.cmp(&b.start_position.row)
+        let pos_cmp = a
+            .start_position
+            .row
+            .cmp(&b.start_position.row)
             .then(a.start_position.column.cmp(&b.start_position.column));
         if pos_cmp != std::cmp::Ordering::Equal {
             return pos_cmp;
@@ -53,19 +56,19 @@ fn deduplicate_errors(mut errors: Vec<ParseError>) -> Vec<ParseError> {
         let b_len = b.end_byte - b.start_byte;
         b_len.cmp(&a_len) // Larger ranges first
     });
-    
+
     let mut deduplicated = Vec::new();
-    
+
     for error in errors {
         let should_keep = deduplicated.iter().all(|existing: &ParseError| {
             !ranges_overlap(&error, existing) || is_significantly_different(&error, existing)
         });
-        
+
         if should_keep {
             deduplicated.push(error);
         }
     }
-    
+
     deduplicated
 }
 
@@ -76,7 +79,7 @@ fn ranges_overlap(a: &ParseError, b: &ParseError) -> bool {
     let a_end = (a.end_position.row, a.end_position.column);
     let b_start = (b.start_position.row, b.start_position.column);
     let b_end = (b.end_position.row, b.end_position.column);
-    
+
     // No overlap if one range ends before the other starts
     !(a_end <= b_start || b_end <= a_start)
 }
@@ -87,27 +90,27 @@ fn is_significantly_different(a: &ParseError, b: &ParseError) -> bool {
     if a.kind != b.kind {
         return true;
     }
-    
+
     // For overlapping errors of the same kind, check if they're really different enough to keep both
     if let (Some(a_parent), Some(b_parent)) = (&a.context.parent_kind, &b.context.parent_kind) {
         // Don't keep both if one parent is just "ERROR" (generic) and the other is more specific
         if a_parent == "ERROR" || b_parent == "ERROR" {
             return false;
         }
-        
+
         // Keep both only if they have truly different meaningful contexts
         if a_parent != b_parent {
             return true;
         }
     }
-    
+
     // Keep both if they have very different actual text that isn't just a substring
     if let (Some(a_text), Some(b_text)) = (&a.context.actual_text, &b.context.actual_text) {
         if a_text != b_text && !a_text.contains(b_text) && !b_text.contains(a_text) {
             return true;
         }
     }
-    
+
     false
 }
 
@@ -122,13 +125,23 @@ fn create_detailed_error_message(error: &ParseError) -> String {
         }
     } else {
         // Handle unexpected tokens with context
-        match (&error.context.expected, &error.context.actual_text, &error.context.parent_kind) {
+        match (
+            &error.context.expected,
+            &error.context.actual_text,
+            &error.context.parent_kind,
+        ) {
             (Some(expected), Some(actual), Some(parent)) => {
                 // Special case for type annotations to be more specific
                 if parent == "type_annotation" || parent == "type_ref" {
-                    format!("Expected '{}' in type signature, but found '{}'", expected, actual)
+                    format!(
+                        "Expected '{}' in type signature, but found '{}'",
+                        expected, actual
+                    )
                 } else {
-                    format!("Expected {} in {}, but found '{}'", expected, parent, actual)
+                    format!(
+                        "Expected {} in {}, but found '{}'",
+                        expected, parent, actual
+                    )
                 }
             }
             (Some(expected), None, Some(parent)) => {
@@ -156,7 +169,7 @@ fn create_detailed_error_message(error: &ParseError) -> String {
             }
             (None, None, Some(parent)) => {
                 if parent == "type_annotation" || parent == "type_ref" {
-                    format!("Invalid type signature")
+                    "Invalid type signature".to_string()
                 } else {
                     format!("Syntax error in {}", parent)
                 }
@@ -172,9 +185,9 @@ fn create_detailed_error_message(error: &ParseError) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tree_sitter::Point;
     use crate::parser::ParseErrorContext;
     use crate::Parser;
+    use tree_sitter::Point;
 
     #[test]
     fn test_parse_error_to_diagnostic() {
@@ -189,10 +202,10 @@ mod tests {
         };
 
         let diagnostics = parse_errors_to_diagnostics(vec![error]);
-        
+
         assert_eq!(diagnostics.len(), 1);
         let diagnostic = &diagnostics[0];
-        
+
         assert_eq!(diagnostic.range.start.line, 0);
         assert_eq!(diagnostic.range.start.character, 0);
         assert_eq!(diagnostic.range.end.line, 0);
@@ -215,10 +228,10 @@ mod tests {
         };
 
         let diagnostics = parse_errors_to_diagnostics(vec![error]);
-        
+
         assert_eq!(diagnostics.len(), 1);
         let diagnostic = &diagnostics[0];
-        
+
         assert_eq!(diagnostic.range.start.line, 1);
         assert_eq!(diagnostic.range.start.character, 10);
         assert!(diagnostic.message.contains("Missing identifier"));
@@ -243,14 +256,17 @@ mod tests {
 
         let diagnostics = parse_errors_to_diagnostics(vec![error]);
         let diagnostic = &diagnostics[0];
-        
-        assert_eq!(diagnostic.message, "Expected '->' in type signature, but found 'Int'");
+
+        assert_eq!(
+            diagnostic.message,
+            "Expected '->' in type signature, but found 'Int'"
+        );
     }
 
     #[test]
     fn test_parser_finds_syntax_errors() {
         let mut parser = Parser::new().expect("Failed to create parser");
-        
+
         // Test with invalid Gren syntax
         let invalid_gren = r#"
 module Test exposing (..)
@@ -262,17 +278,25 @@ func x y =
 
 badFunc = 
 "#;
-        
-        let tree = parser.parse(invalid_gren).expect("Parse should not fail").expect("Tree should exist");
+
+        let tree = parser
+            .parse(invalid_gren)
+            .expect("Parse should not fail")
+            .expect("Tree should exist");
         let errors = Parser::extract_errors(&tree);
-        
+
         println!("Found {} errors in invalid Gren code", errors.len());
         for error in &errors {
-            println!("Error: {} at {:?}-{:?} (missing: {})", 
-                     error.kind, error.start_position, error.end_position, error.is_missing);
+            println!(
+                "Error: {} at {:?}-{:?} (missing: {})",
+                error.kind, error.start_position, error.end_position, error.is_missing
+            );
         }
-        
+
         // We should find at least some syntax errors
-        assert!(!errors.is_empty(), "Parser should detect syntax errors in invalid Gren code");
+        assert!(
+            !errors.is_empty(),
+            "Parser should detect syntax errors in invalid Gren code"
+        );
     }
 }

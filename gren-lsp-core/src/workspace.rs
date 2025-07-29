@@ -1,4 +1,4 @@
-use crate::{Document, Parser, parse_errors_to_diagnostics, SymbolIndex, SymbolExtractor};
+use crate::{parse_errors_to_diagnostics, Document, Parser, SymbolExtractor, SymbolIndex};
 use anyhow::Result;
 use lru::LruCache;
 use lsp_types::*;
@@ -22,22 +22,18 @@ impl Workspace {
         Ok(Self {
             root_uri: None,
             documents: HashMap::new(),
-            recently_accessed: LruCache::new(
-                NonZeroUsize::new(DEFAULT_CACHE_SIZE).unwrap()
-            ),
+            recently_accessed: LruCache::new(NonZeroUsize::new(DEFAULT_CACHE_SIZE).unwrap()),
             parser: Parser::new()?,
             symbol_index: SymbolIndex::new()?,
             symbol_extractor: SymbolExtractor::new()?,
         })
     }
-    
+
     pub fn with_capacity(capacity: usize) -> Result<Self> {
         Ok(Self {
             root_uri: None,
             documents: HashMap::new(),
-            recently_accessed: LruCache::new(
-                NonZeroUsize::new(capacity.max(1)).unwrap()
-            ),
+            recently_accessed: LruCache::new(NonZeroUsize::new(capacity.max(1)).unwrap()),
             parser: Parser::new()?,
             symbol_index: SymbolIndex::new()?,
             symbol_extractor: SymbolExtractor::new()?,
@@ -52,72 +48,76 @@ impl Workspace {
     pub fn open_document(&mut self, text_document: TextDocumentItem) -> Result<()> {
         let uri = text_document.uri.clone();
         info!("Opening document: {}", uri);
-        
+
         let mut document = Document::new(text_document);
-        
+
         // Trigger initial parse
         document.reparse(&mut self.parser)?;
-        
+
         // Insert document first, then extract symbols
         self.documents.insert(uri.clone(), document);
-        
+
         // Extract and index symbols
         self.extract_and_update_symbols_for_uri(&uri)?;
-        
+
         // Evict old documents if cache is at capacity
         self.evict_if_needed();
-        
+
         // Update LRU cache
         self.recently_accessed.put(uri, ());
-        
+
         Ok(())
     }
 
     pub fn update_document(&mut self, params: DidChangeTextDocumentParams) -> Result<()> {
         let uri = params.text_document.uri.clone();
-        
+
         if let Some(document) = self.documents.get_mut(&uri) {
             // Verify version matches or is newer
             if params.text_document.version < document.version() {
-                warn!("Received older version for document {}: {} < {}", 
-                      uri, params.text_document.version, document.version());
+                warn!(
+                    "Received older version for document {}: {} < {}",
+                    uri,
+                    params.text_document.version,
+                    document.version()
+                );
                 return Ok(());
             }
-            
+
             // Apply changes
             document.apply_changes(params.content_changes)?;
-            
+
             // Update access time
             self.recently_accessed.put(uri.clone(), ());
-            
+
             info!("Updated document: {} (version {})", uri, document.version());
         }
-        
+
         // Re-extract and index symbols after releasing the borrow
         if self.documents.contains_key(&uri) {
             if let Err(e) = self.extract_and_update_symbols_for_uri(&uri) {
                 warn!("Failed to re-extract symbols for {}: {}", uri, e);
             }
         }
-        
+
         if !self.documents.contains_key(&uri) {
             warn!("Attempted to update non-existent document: {}", uri);
         }
-        
+
         Ok(())
     }
 
     pub fn close_document(&mut self, uri: Url) -> Result<()> {
         info!("Closing document: {}", uri);
-        
+
         // Remove symbols from index
         if let Err(e) = self.symbol_index.clear_file_symbols(uri.as_str()) {
             warn!("Failed to clear symbols for {}: {}", uri, e);
         }
-        
+
         self.documents.remove(&uri);
         self.recently_accessed.pop(&uri);
-        
+
         Ok(())
     }
 
@@ -192,7 +192,7 @@ impl Workspace {
             warn!("Document not found for diagnostics: {}", uri);
             return Vec::new();
         }
-        
+
         // Get document and ensure it's reparsed if needed
         if let Some(document) = self.documents.get_mut(uri) {
             info!("Getting parse tree for diagnostics: {}", uri);
@@ -200,16 +200,19 @@ impl Workspace {
                 warn!("Failed to parse document {}: {}", uri, e);
                 return Vec::new();
             }
-            
+
             // Update LRU access time
             self.recently_accessed.put(uri.clone(), ());
-            
+
             // Get diagnostics from the same document reference
             let errors = document.parse_errors().to_vec();
             info!("Document {} has {} parse errors", uri, errors.len());
             let diagnostics = parse_errors_to_diagnostics(errors);
             for diagnostic in &diagnostics {
-                info!("Diagnostic: {} at {:?}", diagnostic.message, diagnostic.range);
+                info!(
+                    "Diagnostic: {} at {:?}",
+                    diagnostic.message, diagnostic.range
+                );
             }
             diagnostics
         } else {
@@ -220,7 +223,7 @@ impl Workspace {
     /// Get diagnostics for all open documents
     pub fn get_all_diagnostics(&self) -> HashMap<Url, Vec<Diagnostic>> {
         let mut all_diagnostics = HashMap::new();
-        
+
         for (uri, document) in &self.documents {
             let errors = document.parse_errors().to_vec();
             let diagnostics = parse_errors_to_diagnostics(errors);
@@ -228,7 +231,7 @@ impl Workspace {
                 all_diagnostics.insert(uri.clone(), diagnostics);
             }
         }
-        
+
         all_diagnostics
     }
 
@@ -238,7 +241,7 @@ impl Workspace {
         if let Err(e) = self.symbol_index.clear_file_symbols(uri.as_str()) {
             warn!("Failed to clear symbols for {}: {}", uri, e);
         }
-        
+
         // Get document content and parse tree in separate scopes to avoid borrowing conflicts
         let (source, tree_available) = if let Some(document) = self.documents.get_mut(uri) {
             let source = document.text().to_string();
@@ -255,12 +258,12 @@ impl Workspace {
             warn!("Document not found for symbol extraction: {}", uri);
             return Ok(());
         };
-        
+
         if !tree_available {
             warn!("No parse tree available for symbol extraction: {}", uri);
             return Ok(());
         }
-        
+
         // Get the tree again in a separate borrow scope
         if let Some(document) = self.documents.get_mut(uri) {
             if let Ok(Some(tree)) = document.get_parse_tree(&mut self.parser) {
@@ -268,24 +271,27 @@ impl Workspace {
                 match self.symbol_extractor.extract_symbols(tree, &source, uri) {
                     Ok(symbols) => {
                         info!("Extracted {} symbols from {}", symbols.len(), uri);
-                        
+
                         // Index each symbol
                         for symbol in symbols {
                             if let Err(e) = self.symbol_index.index_symbol(&symbol) {
-                                warn!("Failed to index symbol '{}' from {}: {}", symbol.name, uri, e);
+                                warn!(
+                                    "Failed to index symbol '{}' from {}: {}",
+                                    symbol.name, uri, e
+                                );
                             }
                         }
-                    },
+                    }
                     Err(e) => {
                         warn!("Failed to extract symbols from {}: {}", uri, e);
                     }
                 }
             }
         }
-        
+
         Ok(())
     }
-    
+
     /// Search for symbols by name
     pub fn find_symbols(&self, name: &str) -> Result<Vec<crate::Symbol>> {
         match self.symbol_index.find_symbol(name) {
@@ -296,29 +302,30 @@ impl Workspace {
             }
         }
     }
-    
+
     /// Get all symbols for a specific file
     pub fn get_file_symbols(&self, uri: &Url) -> Result<Vec<crate::Symbol>> {
         // For now, we'll do a full search and filter
         // TODO: Add a more efficient method to the symbol index
         match self.symbol_index.find_symbol("") {
             Ok(all_symbols) => {
-                let file_symbols = all_symbols.into_iter()
+                let file_symbols = all_symbols
+                    .into_iter()
                     .filter(|symbol| symbol.location.uri == *uri)
                     .collect();
                 Ok(file_symbols)
-            },
+            }
             Err(e) => {
                 warn!("Failed to get symbols for {}: {}", uri, e);
                 Ok(Vec::new())
             }
         }
     }
-    
+
     /// Force re-indexing of all open documents
     pub fn reindex_all_symbols(&mut self) -> Result<()> {
         info!("Re-indexing symbols for all open documents");
-        
+
         let uris: Vec<Url> = self.documents.keys().cloned().collect();
         for uri in uris {
             // Extract and index symbols for each document separately to avoid borrowing issues
@@ -328,7 +335,7 @@ impl Workspace {
                 }
             }
         }
-        
+
         Ok(())
     }
 }

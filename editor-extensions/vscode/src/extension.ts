@@ -90,6 +90,10 @@ export function activate(context: ExtensionContext) {
       fileEvents: workspace.createFileSystemWatcher("**/*.gren"),
     },
     outputChannelName: "Gren LSP",
+    // Enable trusted markdown for clickable links in hover content
+    markdown: {
+      isTrusted: true,
+    },
   };
 
   // Create the language client and start the client.

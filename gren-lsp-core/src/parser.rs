@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
-use tree_sitter::{Parser as TreeSitterParser, Tree, Node, Language};
 use std::path::Path;
+use tree_sitter::{Language, Node, Parser as TreeSitterParser, Tree};
 
 pub struct Parser {
     parser: TreeSitterParser,
@@ -9,19 +9,19 @@ pub struct Parser {
 impl Parser {
     pub fn new() -> Result<Self> {
         use tracing::info;
-        
+
         info!("Creating new parser");
         let mut parser = TreeSitterParser::new();
-        
+
         info!("Loading Gren grammar");
         // Set Gren language from tree-sitter-gren
         let language = tree_sitter_gren::language();
-        
+
         info!("Setting language for parser");
         parser
             .set_language(language)
             .context("Error loading Gren grammar")?;
-        
+
         info!("Parser created successfully");
         Ok(Self { parser })
     }
@@ -50,7 +50,7 @@ impl Parser {
     pub fn parse_file<P: AsRef<Path>>(&mut self, path: P) -> Result<Option<Tree>> {
         let source = std::fs::read_to_string(path.as_ref())
             .with_context(|| format!("Failed to read file: {}", path.as_ref().display()))?;
-        
+
         self.parse(&source)
     }
 
@@ -91,14 +91,14 @@ impl Parser {
     pub fn extract_errors_with_source(tree: &Tree, source: &str) -> Vec<ParseError> {
         let mut errors = Vec::new();
         Self::collect_errors(tree.root_node(), Some(source.as_bytes()), &mut errors);
-        
+
         // TODO: In the future, we could add semantic validation here by:
         // 1. Building up type information from the tree-sitter parse
-        // 2. Tracking type constructor definitions and their arities 
+        // 2. Tracking type constructor definitions and their arities
         // 3. Validating type applications against known constructors
         // This would allow us to catch errors like missing arrows in type signatures
         // without making unfounded assumptions about the type system.
-        
+
         errors
     }
 
@@ -123,26 +123,25 @@ impl Parser {
         }
     }
 
-
     /// Get additional context for error nodes
     fn get_error_context(node: Node, source: Option<&[u8]>) -> ParseErrorContext {
         let mut context = ParseErrorContext::default();
-        
+
         // Get parent context for better error messages
         if let Some(parent) = node.parent() {
             context.parent_kind = Some(parent.kind().to_string());
-            
+
             // Try to infer what was expected based on parent context
             context.expected = Self::infer_expected_token(&parent, node);
         }
-        
+
         // Get the actual text content if available
         if let Some(source_bytes) = source {
             if let Ok(source_text) = node.utf8_text(source_bytes) {
                 context.actual_text = Some(source_text.to_string());
             }
         }
-        
+
         // Get sibling context
         if let Some(prev_sibling) = node.prev_sibling() {
             context.previous_sibling = Some(prev_sibling.kind().to_string());
@@ -150,10 +149,10 @@ impl Parser {
         if let Some(next_sibling) = node.next_sibling() {
             context.next_sibling = Some(next_sibling.kind().to_string());
         }
-        
+
         context
     }
-    
+
     /// Try to infer what token was expected based on context
     fn infer_expected_token(parent: &Node, error_node: Node) -> Option<String> {
         match parent.kind() {
@@ -162,7 +161,7 @@ impl Parser {
                 // Common pattern: "identifier : Type -> ReturnType"
                 let error_start = error_node.start_byte();
                 let parent_children: Vec<_> = parent.children(&mut parent.walk()).collect();
-                
+
                 // Find where the error is in relation to other children
                 for (i, child) in parent_children.iter().enumerate() {
                     if child.start_byte() >= error_start {
@@ -174,19 +173,13 @@ impl Parser {
                         };
                     }
                 }
-                
+
                 Some("'->' or type".to_string())
             }
-            "function_declaration" => {
-                Some("'=' or function body".to_string())
-            }
-            "let_expression" => {
-                Some("'in' keyword".to_string())
-            }
-            "comment" => {
-                Some("comment content".to_string())
-            }
-            _ => None
+            "function_declaration" => Some("'=' or function body".to_string()),
+            "let_expression" => Some("'in' keyword".to_string()),
+            "comment" => Some("comment content".to_string()),
+            _ => None,
         }
     }
 }

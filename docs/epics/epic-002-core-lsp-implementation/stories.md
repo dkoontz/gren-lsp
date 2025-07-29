@@ -85,12 +85,12 @@
 **Description:** Provide code completion for symbols in the current file and imported modules.
 
 **Acceptance Criteria:**
-- [ ] Handle textDocument/completion requests
-- [ ] Complete local symbols from current file
-- [ ] Include imported symbols from other modules
-- [ ] Provide completion item details (type, docs)
-- [ ] Support keyword completion
-- [ ] Filter results based on context
+- [x] Handle textDocument/completion requests
+- [x] Complete local symbols from current file
+- [x] Include imported symbols from other modules
+- [x] Provide completion item details (type, docs)
+- [x] Support keyword completion
+- [x] Filter results based on context
 
 **Technical Notes:**
 - Implement fuzzy matching for better UX
@@ -117,12 +117,12 @@
 **Description:** Display type signatures and documentation on hover.
 
 **Acceptance Criteria:**
-- [ ] Handle textDocument/hover requests
-- [ ] Show type signatures for functions
-- [ ] Display documentation if available
-- [ ] Format hover content as Markdown
-- [ ] Include module information
-- [ ] Respond quickly to hover requests
+- [x] Handle textDocument/hover requests
+- [x] Show type signatures for functions
+- [x] Display documentation if available
+- [x] Format hover content as Markdown
+- [x] Include module information
+- [x] Respond quickly to hover requests
 
 **Technical Notes:**
 - Extract doc comments from source
@@ -144,3 +144,19 @@
 - Use parallel processing for initial indexing
 - Implement incremental index updates
 - Design for large workspace scalability
+
+## Story 2.9: Extract Documentation Comments
+**Description:** Parse and extract Gren documentation comments ({-| ... -}) and associate them with symbols.
+
+**Acceptance Criteria:**
+- [x] Parse Gren doc comments ({-| ... -}) from source code
+- [x] Associate doc comments with their corresponding symbols during extraction
+- [x] Store documentation in symbol database
+- [x] Update hover to display extracted documentation
+- [x] Clean and format documentation text appropriately
+
+**Technical Notes:**
+- Documentation comments use {-| ... -} syntax in Gren
+- Comments should be associated with symbols that appear 1-3 lines after the comment ends
+- Clean documentation by removing excess whitespace and empty lines
+- Display documentation in hover alongside type signatures and symbol information

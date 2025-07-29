@@ -75,7 +75,10 @@ impl LspTestClient {
                         completion_item: Some(CompletionItemCapability {
                             snippet_support: Some(true),
                             commit_characters_support: Some(true),
-                            documentation_format: Some(vec![MarkupKind::Markdown, MarkupKind::PlainText]),
+                            documentation_format: Some(vec![
+                                MarkupKind::Markdown,
+                                MarkupKind::PlainText,
+                            ]),
                             deprecated_support: Some(true),
                             preselect_support: Some(true),
                             tag_support: Some(TagSupport {
@@ -109,7 +112,10 @@ impl LspTestClient {
                     signature_help: Some(SignatureHelpClientCapabilities {
                         dynamic_registration: Some(true),
                         signature_information: Some(SignatureInformationSettings {
-                            documentation_format: Some(vec![MarkupKind::Markdown, MarkupKind::PlainText]),
+                            documentation_format: Some(vec![
+                                MarkupKind::Markdown,
+                                MarkupKind::PlainText,
+                            ]),
                             parameter_information: Some(ParameterInformationSettings {
                                 label_offset_support: Some(true),
                             }),
@@ -192,7 +198,9 @@ impl LspTestClient {
                     rename: Some(RenameClientCapabilities {
                         dynamic_registration: Some(true),
                         prepare_support: Some(true),
-                        prepare_support_default_behavior: Some(PrepareSupportDefaultBehavior::IDENTIFIER),
+                        prepare_support_default_behavior: Some(
+                            PrepareSupportDefaultBehavior::IDENTIFIER,
+                        ),
                         honors_change_annotations: Some(true),
                     }),
                     publish_diagnostics: Some(PublishDiagnosticsClientCapabilities {
@@ -261,7 +269,11 @@ impl LspTestClient {
     }
 
     /// Create a test document open notification
-    pub fn create_did_open_notification(uri: &str, language_id: &str, content: &str) -> DidOpenTextDocumentParams {
+    pub fn create_did_open_notification(
+        uri: &str,
+        language_id: &str,
+        content: &str,
+    ) -> DidOpenTextDocumentParams {
         DidOpenTextDocumentParams {
             text_document: TextDocumentItem {
                 uri: Url::parse(uri).unwrap(),
@@ -303,7 +315,11 @@ impl LspTestClient {
     }
 
     /// Create a go-to-definition request
-    pub fn create_goto_definition_request(uri: &str, line: u32, character: u32) -> GotoDefinitionParams {
+    pub fn create_goto_definition_request(
+        uri: &str,
+        line: u32,
+        character: u32,
+    ) -> GotoDefinitionParams {
         GotoDefinitionParams {
             text_document_position_params: TextDocumentPositionParams {
                 text_document: TextDocumentIdentifier {

@@ -11,7 +11,7 @@ fn test_parser_initialization() {
 #[test]
 fn test_parse_simple_module() {
     let mut parser = Parser::new().expect("Parser initialization failed");
-    
+
     let source = r#"
 module TestModule exposing (..)
 
@@ -19,19 +19,22 @@ greet : String -> String
 greet name =
     "Hello, " ++ name
 "#;
-    
+
     let tree = parser.parse(source).expect("Parse should not fail");
     assert!(tree.is_some(), "Parse should return a tree");
-    
+
     let tree = tree.unwrap();
-    assert!(!Parser::has_errors(&tree), "Parse tree should not contain errors");
+    assert!(
+        !Parser::has_errors(&tree),
+        "Parse tree should not contain errors"
+    );
 }
 
 /// Test parsing with syntax errors
 #[test]
 fn test_parse_with_errors() {
     let mut parser = Parser::new().expect("Parser initialization failed");
-    
+
     // Invalid Gren code with syntax error
     let source = r#"
 module TestModule exposing (..)
@@ -39,13 +42,21 @@ module TestModule exposing (..)
 greet : String ->
     "Hello"
 "#;
-    
-    let tree = parser.parse(source).expect("Parse should not fail even with errors");
-    assert!(tree.is_some(), "Parse should return a tree even with errors");
-    
+
+    let tree = parser
+        .parse(source)
+        .expect("Parse should not fail even with errors");
+    assert!(
+        tree.is_some(),
+        "Parse should return a tree even with errors"
+    );
+
     let tree = tree.unwrap();
-    assert!(Parser::has_errors(&tree), "Parse tree should contain errors");
-    
+    assert!(
+        Parser::has_errors(&tree),
+        "Parse tree should contain errors"
+    );
+
     let errors = Parser::extract_errors(&tree);
     assert!(!errors.is_empty(), "Should extract at least one error");
 }
@@ -54,7 +65,7 @@ greet : String ->
 #[test]
 fn test_incremental_parsing() {
     let mut parser = Parser::new().expect("Parser initialization failed");
-    
+
     let initial_source = r#"
 module TestModule exposing (..)
 
@@ -62,12 +73,13 @@ greet : String -> String
 greet name =
     "Hello, " ++ name
 "#;
-    
+
     // Parse initial source
-    let old_tree = parser.parse(initial_source)
+    let old_tree = parser
+        .parse(initial_source)
         .expect("Initial parse should not fail")
         .expect("Should return a tree");
-    
+
     // Modified source
     let modified_source = r#"
 module TestModule exposing (..)
@@ -76,20 +88,24 @@ greet : String -> String
 greet name =
     "Hi, " ++ name
 "#;
-    
+
     // Parse incrementally
-    let new_tree = parser.parse_incremental(modified_source, Some(&old_tree))
+    let new_tree = parser
+        .parse_incremental(modified_source, Some(&old_tree))
         .expect("Incremental parse should not fail")
         .expect("Should return a tree");
-    
-    assert!(!Parser::has_errors(&new_tree), "Incremental parse should not have errors");
+
+    assert!(
+        !Parser::has_errors(&new_tree),
+        "Incremental parse should not have errors"
+    );
 }
 
 /// Test parsing empty file
 #[test]
 fn test_parse_empty_file() {
     let mut parser = Parser::new().expect("Parser initialization failed");
-    
+
     let source = "";
     let tree = parser.parse(source).expect("Parse should not fail");
     assert!(tree.is_some(), "Parse should return a tree for empty input");
@@ -99,7 +115,7 @@ fn test_parse_empty_file() {
 #[test]
 fn test_parse_complex_constructs() {
     let mut parser = Parser::new().expect("Parser initialization failed");
-    
+
     let source = r#"
 module ComplexModule exposing (..)
 
@@ -131,10 +147,10 @@ handleMessage msg =
         Loading ->
             "Loading..."
 "#;
-    
+
     let tree = parser.parse(source).expect("Parse should not fail");
     assert!(tree.is_some(), "Parse should return a tree");
-    
+
     let tree = tree.unwrap();
     if Parser::has_errors(&tree) {
         let errors = Parser::extract_errors(&tree);
@@ -148,7 +164,7 @@ handleMessage msg =
 #[test]
 fn test_parse_type_annotations() {
     let mut parser = Parser::new().expect("Parser initialization failed");
-    
+
     let source = r#"
 module TypeAnnotations exposing (..)
 
@@ -167,19 +183,22 @@ compare a b =
     else
         EQ
 "#;
-    
+
     let tree = parser.parse(source).expect("Parse should not fail");
     assert!(tree.is_some(), "Parse should return a tree");
-    
+
     let tree = tree.unwrap();
-    assert!(!Parser::has_errors(&tree), "Type annotations should parse correctly");
+    assert!(
+        !Parser::has_errors(&tree),
+        "Type annotations should parse correctly"
+    );
 }
 
 /// Test parsing comments
 #[test]
 fn test_parse_comments() {
     let mut parser = Parser::new().expect("Parser initialization failed");
-    
+
     let source = r#"
 module Comments exposing (..)
 
@@ -195,12 +214,15 @@ greet name =
     -- Another line comment
     "Hello, " ++ name  -- End of line comment
 "#;
-    
+
     let tree = parser.parse(source).expect("Parse should not fail");
     assert!(tree.is_some(), "Parse should return a tree");
-    
+
     let tree = tree.unwrap();
-    assert!(!Parser::has_errors(&tree), "Comments should not cause parse errors");
+    assert!(
+        !Parser::has_errors(&tree),
+        "Comments should not cause parse errors"
+    );
 }
 
 /// Test language() function
@@ -208,30 +230,36 @@ greet name =
 fn test_language_function() {
     let language = Parser::language();
     // Test that we get a valid language object
-    assert!(language.node_kind_count() > 0, "Language should have node kinds");
+    assert!(
+        language.node_kind_count() > 0,
+        "Language should have node kinds"
+    );
 }
 
 /// Test error information extraction
 #[test]
 fn test_error_extraction() {
     let mut parser = Parser::new().expect("Parser initialization failed");
-    
+
     let source = r#"
 module TestModule exposing (..)
 
 -- Missing type annotation and function body
 someFunction : 
 "#;
-    
+
     let tree = parser.parse(source).expect("Parse should not fail");
     let tree = tree.unwrap();
-    
+
     let errors = Parser::extract_errors(&tree);
     assert!(!errors.is_empty(), "Should extract parse errors");
-    
+
     for error in &errors {
         // Verify error structure
-        assert!(error.start_byte <= error.end_byte, "Error byte range should be valid");
+        assert!(
+            error.start_byte <= error.end_byte,
+            "Error byte range should be valid"
+        );
         assert!(!error.kind.is_empty(), "Error should have a kind");
     }
 }
@@ -240,7 +268,7 @@ someFunction :
 #[test]
 fn test_parse_sample_files() {
     let mut parser = Parser::new().expect("Parser initialization failed");
-    
+
     // Create a sample Gren file for testing
     let sample_content = r#"
 module Sample exposing (..)
@@ -266,10 +294,13 @@ processGroup people =
         |> Array.filter isAdult
         |> Array.map .name
 "#;
-    
+
     let tree = parser.parse(sample_content).expect("Parse should not fail");
     assert!(tree.is_some(), "Sample file should parse");
-    
+
     let tree = tree.unwrap();
-    assert!(!Parser::has_errors(&tree), "Sample file should not have errors");
+    assert!(
+        !Parser::has_errors(&tree),
+        "Sample file should not have errors"
+    );
 }

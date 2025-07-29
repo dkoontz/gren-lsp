@@ -14,14 +14,13 @@ async fn main() -> Result<()> {
     let log_dir = std::env::temp_dir().join("gren-lsp");
     std::fs::create_dir_all(&log_dir).ok();
     let log_file = log_dir.join("server.log");
-    
+
     let file_appender = tracing_appender::rolling::never(&log_dir, "server.log");
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
-    
+
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("gren_lsp=debug")),
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("gren_lsp=debug")),
         )
         .with_writer(non_blocking)
         .with_ansi(false)

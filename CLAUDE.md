@@ -63,6 +63,7 @@ This is a Rust workspace with three main crates:
 ### Important Development Guidelines
 - **ALWAYS use Justfile commands when possible** - Use `just` commands instead of raw `cargo` or `npm` commands to ensure reproducibility of actions and follow project conventions
 - **IMPERATIVE: Tree-sitter based implementation** - The LSP implementation MUST be based on tree-sitter parse data and NOT on regex or other string matching techniques. This ensures accurate, incremental parsing that respects Gren's syntax structure
+- **CRITICAL: Never lie to the user** - LSP operations that have a single correct answer (like go-to-definition) must either succeed with the correct result or fail/show no result. Due to Gren's deterministic import semantics and absence of polymorphic overloading, there should be almost no "fallback" mechanisms. It's better to show nothing than to show an incorrect result that could confuse developers
 - **Clean up temporary scripts** - Always clean up any temporary scripts or files before completing a task
 
 ### Testing
@@ -77,6 +78,8 @@ This is a Rust workspace with three main crates:
 - Immutable by default
 - Effects handled through Cmd types
 - Small, predictable syntax ideal for tree-sitter parsing
+- **Deterministic imports**: Explicit import statements with no ambiguity - each symbol has exactly one source
+- **No polymorphic overloading**: Function names are unique within their scope, enabling precise symbol resolution
 
 ### Performance Considerations
 - Uses LRU caching for workspace documents (default 100 items)
