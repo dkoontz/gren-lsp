@@ -476,7 +476,7 @@ impl Handlers {
                 tags: None,
                 #[allow(deprecated)]
                 #[allow(deprecated)]
-            deprecated: Some(false),
+                deprecated: Some(false),
             };
             document_symbols.push(doc_symbol);
             processed_modules.insert(module.name.clone());
@@ -533,8 +533,8 @@ impl Handlers {
                     tags: None,
                     #[allow(deprecated)]
                     #[allow(deprecated)]
-                #[allow(deprecated)]
-            deprecated: Some(false),
+                    #[allow(deprecated)]
+                    deprecated: Some(false),
                 })
                 .collect();
 
@@ -552,7 +552,7 @@ impl Handlers {
                 tags: None,
                 #[allow(deprecated)]
                 #[allow(deprecated)]
-            deprecated: Some(false),
+                deprecated: Some(false),
             };
 
             document_symbols.push(doc_symbol);
@@ -571,7 +571,7 @@ impl Handlers {
                 tags: None,
                 #[allow(deprecated)]
                 #[allow(deprecated)]
-            deprecated: Some(false),
+                deprecated: Some(false),
             };
             document_symbols.push(doc_symbol);
         }

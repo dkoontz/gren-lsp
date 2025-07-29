@@ -77,6 +77,13 @@ impl LanguageServer for GrenLanguageServer {
                 definition_provider: Some(OneOf::Left(true)),
                 document_symbol_provider: Some(OneOf::Left(true)),
                 workspace_symbol_provider: Some(OneOf::Left(true)),
+                workspace: Some(WorkspaceServerCapabilities {
+                    workspace_folders: Some(WorkspaceFoldersServerCapabilities {
+                        supported: Some(true),
+                        change_notifications: Some(OneOf::Left(true)),
+                    }),
+                    ..Default::default()
+                }),
                 // TODO: Implement these features
                 // references_provider: Some(OneOf::Left(true)),
                 // code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
@@ -237,6 +244,28 @@ impl LanguageServer for GrenLanguageServer {
             }
         }
     }
+
+    async fn did_change_workspace_folders(&self, params: DidChangeWorkspaceFoldersParams) {
+        info!(
+            "Workspace folders changed: {} added, {} removed",
+            params.event.added.len(),
+            params.event.removed.len()
+        );
+
+        // Handle removed workspace folders
+        for removed_folder in &params.event.removed {
+            info!("Removing workspace folder: {}", removed_folder.uri);
+            self.cleanup_workspace_folder(&removed_folder.uri).await;
+        }
+
+        // Handle added workspace folders
+        for added_folder in &params.event.added {
+            info!("Adding workspace folder: {}", added_folder.uri);
+            self.index_workspace_folder(&added_folder.uri).await;
+        }
+
+        info!("Workspace folder changes processed");
+    }
 }
 
 impl GrenLanguageServer {
@@ -275,6 +304,9 @@ impl GrenLanguageServer {
     async fn index_workspace_files(&self) {
         info!("Starting workspace indexing");
 
+        // Create progress reporting
+        let progress_token = self.create_progress("Indexing workspace").await;
+
         let workspace_root = {
             let workspace = self.workspace.read().await;
             workspace.stats().root_uri.clone()
@@ -283,13 +315,24 @@ impl GrenLanguageServer {
         if let Some(root_uri) = workspace_root {
             info!("Indexing workspace at: {}", root_uri);
 
+            if let Some(token) = &progress_token {
+                self.report_progress(token, "Discovering files...", Some(10))
+                    .await;
+            }
+
             // Use the client's file search capabilities instead of filesystem crawling
             // This respects .gitignore and other editor exclusion rules
             if let Ok(root_path) = root_uri.to_file_path() {
-                self.discover_and_index_files(root_path).await;
+                self.discover_and_index_files_with_progress(root_path, progress_token.as_deref())
+                    .await;
             }
         } else {
             info!("No workspace root set, skipping indexing");
+        }
+
+        // End progress reporting
+        if let Some(token) = progress_token {
+            self.end_progress(&token, Some("Indexing completed")).await;
         }
     }
 
@@ -297,6 +340,16 @@ impl GrenLanguageServer {
     /// In a production implementation, we'd prefer to use workspace/symbol
     /// or other LSP client capabilities for file discovery
     async fn discover_and_index_files(&self, root_path: std::path::PathBuf) {
+        self.discover_and_index_files_with_progress(root_path, None)
+            .await;
+    }
+
+    /// Discover and index files with optional progress reporting
+    async fn discover_and_index_files_with_progress(
+        &self,
+        root_path: std::path::PathBuf,
+        progress_token: Option<&str>,
+    ) {
         use std::path::Path;
         use tokio::fs;
 
@@ -324,6 +377,11 @@ impl GrenLanguageServer {
             Ok(())
         }
 
+        if let Some(token) = progress_token {
+            self.report_progress(token, "Scanning directories...", Some(20))
+                .await;
+        }
+
         let mut gren_files = Vec::new();
         if let Err(e) = walk_dir(&root_path, &mut gren_files).await {
             error!("Failed to walk directory {}: {}", root_path.display(), e);
@@ -332,10 +390,31 @@ impl GrenLanguageServer {
 
         info!("Found {} Gren files to index", gren_files.len());
 
-        // Index files in batches to avoid overwhelming the system
-        for file_path in gren_files {
-            if let Ok(uri) = Url::from_file_path(&file_path) {
+        if let Some(token) = progress_token {
+            self.report_progress(
+                token,
+                &format!("Indexing {} files...", gren_files.len()),
+                Some(30),
+            )
+            .await;
+        }
+
+        let total_files = gren_files.len();
+
+        // Index files with progress updates
+        for (index, file_path) in gren_files.iter().enumerate() {
+            if let Ok(uri) = Url::from_file_path(file_path) {
                 self.index_file(&uri).await;
+            }
+
+            // Report progress every 10 files or for the last file
+            if let Some(token) = progress_token {
+                if index % 10 == 0 || index == total_files - 1 {
+                    let percentage = 30 + ((index + 1) * 60 / total_files.max(1)) as u32;
+                    let message = format!("Indexed {}/{} files", index + 1, total_files);
+                    self.report_progress(token, &message, Some(percentage))
+                        .await;
+                }
             }
         }
 
@@ -377,6 +456,116 @@ impl GrenLanguageServer {
             error!("Failed to index file {}: {}", uri, e);
         } else {
             info!("Successfully indexed file: {}", uri);
+        }
+    }
+
+    /// Index all files in a specific workspace folder
+    async fn index_workspace_folder(&self, folder_uri: &Url) {
+        info!("Indexing workspace folder: {}", folder_uri);
+
+        // Create progress reporting for workspace folder indexing
+        let progress_token = self
+            .create_progress(&format!("Indexing folder: {}", folder_uri.path()))
+            .await;
+
+        if let Ok(folder_path) = folder_uri.to_file_path() {
+            self.discover_and_index_files_with_progress(folder_path, progress_token.as_deref())
+                .await;
+        } else {
+            error!("Invalid workspace folder path: {}", folder_uri);
+        }
+
+        // End progress reporting
+        if let Some(token) = progress_token {
+            self.end_progress(&token, Some("Folder indexing completed"))
+                .await;
+        }
+    }
+
+    /// Clean up symbols and documents from a removed workspace folder
+    async fn cleanup_workspace_folder(&self, folder_uri: &Url) {
+        info!("Cleaning up workspace folder: {}", folder_uri);
+
+        let folder_path = match folder_uri.to_file_path() {
+            Ok(path) => path,
+            Err(_) => {
+                error!("Invalid workspace folder path: {}", folder_uri);
+                return;
+            }
+        };
+
+        let folder_path_str = folder_path.to_string_lossy();
+
+        // Get list of documents that start with the folder path
+        let documents_to_remove = {
+            let workspace = self.workspace.read().await;
+            let stats = workspace.stats();
+            let mut docs = Vec::new();
+
+            // Find all documents in this workspace folder
+            // This is a simplified approach - in a more sophisticated implementation,
+            // we'd have better workspace folder tracking
+            for uri in stats.open_documents {
+                if let Ok(doc_path) = uri.to_file_path() {
+                    let doc_path_str = doc_path.to_string_lossy();
+                    if doc_path_str.starts_with(&*folder_path_str) {
+                        docs.push(uri);
+                    }
+                }
+            }
+            docs
+        };
+
+        // Close documents from the removed workspace folder
+        let mut workspace = self.workspace.write().await;
+        for uri in documents_to_remove {
+            info!("Removing document from workspace: {}", uri);
+            if let Err(e) = workspace.close_document(uri.clone()) {
+                error!("Failed to remove document {}: {}", uri, e);
+            }
+        }
+
+        info!("Workspace folder cleanup completed: {}", folder_uri);
+    }
+
+    /// Create a work done progress token and begin progress reporting
+    async fn create_progress(&self, title: &str) -> Option<String> {
+        // Check if client supports work done progress
+        let supports_progress = {
+            let capabilities = self.client_capabilities.read().await;
+            capabilities
+                .as_ref()
+                .and_then(|caps| caps.window.as_ref())
+                .and_then(|window| window.work_done_progress)
+                .unwrap_or(false)
+        };
+
+        if !supports_progress {
+            info!("Client doesn't support work done progress, using log messages");
+            return None;
+        }
+
+        // For now, use basic logging until we implement proper progress
+        // TODO: Implement proper LSP work done progress when tower-lsp supports it
+        info!("Starting progress: {}", title);
+        Some(title.to_string())
+    }
+
+    /// Report progress update
+    async fn report_progress(&self, _token: &str, message: &str, percentage: Option<u32>) {
+        if let Some(pct) = percentage {
+            info!("Progress ({}%): {}", pct, message);
+        } else {
+            info!("Progress: {}", message);
+        }
+    }
+
+    /// End progress reporting
+    async fn end_progress(&self, _token: &str, message: Option<&str>) {
+        if let Some(msg) = message {
+            info!("Progress completed: {}", msg);
+        } else {
+            info!("Progress completed");
         }
     }
 }

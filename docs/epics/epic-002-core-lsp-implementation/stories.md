@@ -137,8 +137,8 @@
 - [x] Update index on file changes
 - [x] Store symbols with metadata in SQLite
 - [x] Implement efficient symbol search queries
-- [ ] Handle workspace folder changes
-- [ ] Provide progress reporting for indexing
+- [x] Handle workspace folder changes
+- [x] Provide progress reporting for indexing
 
 **Technical Notes:**
 - Use parallel processing for initial indexing

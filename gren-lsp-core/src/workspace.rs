@@ -153,6 +153,7 @@ impl Workspace {
             document_count: self.documents.len(),
             cache_capacity: self.recently_accessed.cap().get(),
             root_uri: self.root_uri.clone(),
+            open_documents: self.documents.keys().cloned().collect(),
         }
     }
 
@@ -345,4 +346,5 @@ pub struct WorkspaceStats {
     pub document_count: usize,
     pub cache_capacity: usize,
     pub root_uri: Option<Url>,
+    pub open_documents: Vec<Url>,
 }

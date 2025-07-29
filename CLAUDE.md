@@ -66,6 +66,9 @@ This is a Rust workspace with three main crates:
 - **CRITICAL: Never lie to the user** - LSP operations that have a single correct answer (like go-to-definition) must either succeed with the correct result or fail/show no result. Due to Gren's deterministic import semantics and absence of polymorphic overloading, there should be almost no "fallback" mechanisms. It's better to show nothing than to show an incorrect result that could confuse developers
 - **Clean up temporary scripts** - Always clean up any temporary scripts or files before completing a task
 
+### LSP documentation
+The LSP spec is available in the `.docs/lsp-spec/3.18` folder. The documentation is broken out according to message types and pages are linked using `{% include types/uri.md %}` directives that indicate the contents of another file should be inserted at that point in the document.
+
 ### Testing
 - Unit tests are in `src/` alongside modules
 - Integration tests in `tests/` directories
