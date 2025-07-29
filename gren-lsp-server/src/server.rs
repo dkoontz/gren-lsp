@@ -58,10 +58,10 @@ impl LanguageServer for GrenLanguageServer {
                     ..Default::default()
                 }),
                 definition_provider: Some(OneOf::Left(true)),
+                document_symbol_provider: Some(OneOf::Left(true)),
+                workspace_symbol_provider: Some(OneOf::Left(true)),
                 // TODO: Implement these features
                 // references_provider: Some(OneOf::Left(true)),
-                // document_symbol_provider: Some(OneOf::Left(true)),
-                // workspace_symbol_provider: Some(OneOf::Left(true)),
                 // code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
                 // rename_provider: Some(OneOf::Left(true)),
                 ..Default::default()
@@ -161,5 +161,21 @@ impl LanguageServer for GrenLanguageServer {
     ) -> Result<Option<GotoDefinitionResponse>> {
         let handlers = Handlers::new(self.workspace.clone());
         handlers.goto_definition(params).await
+    }
+
+    async fn document_symbol(
+        &self,
+        params: DocumentSymbolParams,
+    ) -> Result<Option<DocumentSymbolResponse>> {
+        let handlers = Handlers::new(self.workspace.clone());
+        handlers.document_symbols(params).await
+    }
+
+    async fn symbol(
+        &self,
+        params: WorkspaceSymbolParams,
+    ) -> Result<Option<Vec<SymbolInformation>>> {
+        let handlers = Handlers::new(self.workspace.clone());
+        handlers.workspace_symbols(params).await
     }
 }

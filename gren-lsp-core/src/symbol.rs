@@ -185,8 +185,9 @@ impl SymbolExtractor {
         
         // Query for union type constructors
         let constructor_query = Query::new(language, r#"
-            ; Union type constructors
+            ; Union type constructors with parent type
             (type_declaration 
+                (upper_case_identifier) @constructor.parent_type
                 (union_variant 
                     (upper_case_identifier) @constructor.name)) @constructor.definition
         "#).context("Failed to create constructor query")?;
@@ -339,24 +340,46 @@ impl SymbolExtractor {
         let matches = cursor.matches(&self.constructor_query, tree.root_node(), source_bytes);
         
         for m in matches {
+            let mut constructor_name: Option<String> = None;
+            let mut parent_type: Option<String> = None;
+            let mut constructor_range: Option<Range> = None;
+            
+            // Collect both constructor name and parent type from the same match
             for capture in m.captures {
                 let node = capture.node;
+                let capture_name = &self.constructor_query.capture_names()[capture.index as usize];
                 
-                if let Ok(name) = node.utf8_text(source_bytes) {
-                    let range = Range::new(
-                        Position::new(node.start_position().row as u32, node.start_position().column as u32),
-                        Position::new(node.end_position().row as u32, node.end_position().column as u32),
-                    );
-                    
-                    constructors.push(Symbol {
-                        name: name.to_string(),
-                        kind: SymbolKind::CONSTRUCTOR,
-                        location: Location::new(file_uri.clone(), range),
-                        container_name: None, // TODO: Extract containing type
-                        type_signature: None,
-                        documentation: None,
-                    });
+                if let Ok(text) = node.utf8_text(source_bytes) {
+                    match capture_name.as_str() {
+                        "constructor.name" => {
+                            constructor_name = Some(text.to_string());
+                            
+                            let range = Range::new(
+                                Position::new(node.start_position().row as u32, node.start_position().column as u32),
+                                Position::new(node.end_position().row as u32, node.end_position().column as u32),
+                            );
+                            constructor_range = Some(range);
+                        },
+                        "constructor.parent_type" => {
+                            parent_type = Some(text.to_string());
+                        },
+                        _ => {}
+                    }
                 }
+            }
+            
+            // Only create constructor symbol if we have both name and parent type
+            if let (Some(name), Some(parent), Some(range)) = (constructor_name, parent_type, constructor_range) {
+                constructors.push(Symbol {
+                    name: name.clone(),
+                    kind: SymbolKind::CONSTRUCTOR,
+                    location: Location::new(file_uri.clone(), range),
+                    container_name: Some(parent.clone()),
+                    type_signature: None,
+                    documentation: None,
+                });
+                
+                debug!("Found constructor '{}' for type '{}'", name, parent);
             }
         }
         
@@ -371,24 +394,44 @@ impl SymbolExtractor {
         let matches = cursor.matches(&self.module_query, tree.root_node(), source_bytes);
         
         for m in matches {
+            let mut module_name: Option<String> = None;
+            let mut module_range: Option<Range> = None;
+            
+            // Only capture the module name, not the full declaration
             for capture in m.captures {
                 let node = capture.node;
+                let capture_name = &self.module_query.capture_names()[capture.index as usize];
                 
-                if let Ok(name) = node.utf8_text(source_bytes) {
-                    let range = Range::new(
-                        Position::new(node.start_position().row as u32, node.start_position().column as u32),
-                        Position::new(node.end_position().row as u32, node.end_position().column as u32),
-                    );
-                    
-                    modules.push(Symbol {
-                        name: name.to_string(),
-                        kind: SymbolKind::MODULE,
-                        location: Location::new(file_uri.clone(), range),
-                        container_name: None,
-                        type_signature: None,
-                        documentation: None,
-                    });
+                if let Ok(text) = node.utf8_text(source_bytes) {
+                    match capture_name.as_str() {
+                        "module.name" => {
+                            module_name = Some(text.to_string());
+                            
+                            let range = Range::new(
+                                Position::new(node.start_position().row as u32, node.start_position().column as u32),
+                                Position::new(node.end_position().row as u32, node.end_position().column as u32),
+                            );
+                            module_range = Some(range);
+                        },
+                        _ => {
+                            // Ignore module.definition capture - we only want the name
+                        }
+                    }
                 }
+            }
+            
+            // Only create module symbol if we have a name
+            if let (Some(name), Some(range)) = (module_name, module_range) {
+                modules.push(Symbol {
+                    name: name.clone(),
+                    kind: SymbolKind::MODULE,
+                    location: Location::new(file_uri.clone(), range),
+                    container_name: None,
+                    type_signature: None,
+                    documentation: None,
+                });
+                
+                debug!("Found module '{}'", name);
             }
         }
         

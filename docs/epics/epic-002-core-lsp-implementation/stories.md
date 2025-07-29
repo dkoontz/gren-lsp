@@ -68,12 +68,12 @@
 **Description:** Expose extracted symbols to LSP clients through standard protocol methods.
 
 **Acceptance Criteria:**
-- [ ] Implement textDocument/documentSymbol for file outline view
-- [ ] Implement workspace/symbol for global symbol search
-- [ ] Return hierarchical symbols with proper nesting
-- [ ] Include symbol kinds, ranges, and selection ranges
-- [ ] Support symbol filtering and search queries
-- [ ] Handle symbol icons and descriptions in VS Code
+- [x] Implement textDocument/documentSymbol for file outline view
+- [x] Implement workspace/symbol for global symbol search
+- [x] Return hierarchical symbols with proper nesting
+- [x] Include symbol kinds, ranges, and selection ranges
+- [x] Support symbol filtering and search queries
+- [x] Handle symbol icons and descriptions in VS Code
 
 **Technical Notes:**
 - Convert internal Symbol format to LSP DocumentSymbol/SymbolInformation
