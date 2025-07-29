@@ -162,7 +162,24 @@ impl Workspace {
 
     /// Get diagnostics for a document
     pub fn get_diagnostics(&mut self, uri: &Url) -> Vec<Diagnostic> {
-        if let Some(document) = self.get_document_readonly(uri) {
+        // First check if document exists
+        if !self.documents.contains_key(uri) {
+            warn!("Document not found for diagnostics: {}", uri);
+            return Vec::new();
+        }
+        
+        // Get document and ensure it's reparsed if needed
+        if let Some(document) = self.documents.get_mut(uri) {
+            info!("Getting parse tree for diagnostics: {}", uri);
+            if let Err(e) = document.get_parse_tree(&mut self.parser) {
+                warn!("Failed to parse document {}: {}", uri, e);
+                return Vec::new();
+            }
+            
+            // Update LRU access time
+            self.recently_accessed.put(uri.clone(), ());
+            
+            // Get diagnostics from the same document reference
             let errors = document.parse_errors().to_vec();
             info!("Document {} has {} parse errors", uri, errors.len());
             let diagnostics = parse_errors_to_diagnostics(errors);
@@ -171,7 +188,6 @@ impl Workspace {
             }
             diagnostics
         } else {
-            warn!("Document not found for diagnostics: {}", uri);
             Vec::new()
         }
     }

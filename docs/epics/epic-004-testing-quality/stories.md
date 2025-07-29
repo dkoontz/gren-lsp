@@ -51,7 +51,25 @@
 - Set performance targets from requirements
 - Track trends over time
 
-## Story 4.4: End-to-End VS Code Testing
+## Story 4.4: Fix Incremental Parsing Performance
+**Description:** Restore and fix tree-sitter incremental parsing to improve performance during document edits.
+
+**Acceptance Criteria:**
+- [ ] Investigate tree-sitter incremental parsing state corruption issues
+- [ ] Fix document synchronization with incremental updates
+- [ ] Ensure parse tree consistency across edits
+- [ ] Add comprehensive tests for incremental parsing edge cases
+- [ ] Restore incremental parsing as default (currently disabled)
+- [ ] Verify diagnostics update correctly with incremental parsing
+- [ ] Benchmark performance improvement over full parsing
+
+**Technical Notes:**
+- Currently using full parsing as workaround for incremental parsing bugs
+- Issue likely in `lsp-textdocument` integration or tree-sitter edit handling
+- Need to investigate `TextDocumentContentChangeEvent` processing
+- Consider using tree-sitter's edit tracking more directly
+
+## Story 4.5: End-to-End VS Code Testing
 **Description:** Create automated tests that verify the LSP works correctly with VS Code.
 
 **Acceptance Criteria:**
@@ -68,7 +86,7 @@
 - Create representative test projects
 - Test on multiple platforms
 
-## Story 4.5: Fuzzing and Property Testing
+## Story 4.6: Fuzzing and Property Testing
 **Description:** Implement fuzzing to find edge cases and ensure robustness.
 
 **Acceptance Criteria:**
@@ -84,7 +102,7 @@
 - Test thread safety thoroughly
 - Use AFL for deep fuzzing
 
-## Story 4.6: Load Testing for Large Projects
+## Story 4.7: Load Testing for Large Projects
 **Description:** Ensure the LSP performs well with large Gren codebases.
 
 **Acceptance Criteria:**
@@ -100,7 +118,7 @@
 - Test with real-world project sizes
 - Identify bottlenecks
 
-## Story 4.7: Error Recovery Testing
+## Story 4.8: Error Recovery Testing
 **Description:** Verify the LSP handles errors gracefully without crashing.
 
 **Acceptance Criteria:**
@@ -116,7 +134,7 @@
 - Test recovery mechanisms
 - Verify error messages are helpful
 
-## Story 4.8: Code Quality and Linting
+## Story 4.9: Code Quality and Linting
 **Description:** Establish and enforce code quality standards.
 
 **Acceptance Criteria:**
@@ -132,7 +150,7 @@
 - Enforce in CI pipeline
 - Regular dependency updates
 
-## Story 4.9: CI/CD Pipeline Setup
+## Story 4.10: CI/CD Pipeline Setup
 **Description:** Set up continuous integration pipeline for automated testing and quality checks.
 
 **Acceptance Criteria:**

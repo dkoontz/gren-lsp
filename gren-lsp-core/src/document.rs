@@ -63,8 +63,17 @@ impl Document {
 
     /// Get the current parse tree, parsing if necessary
     pub fn get_parse_tree(&mut self, parser: &mut Parser) -> Result<Option<&Tree>> {
-        if self.parse_tree.is_none() || self.needs_reparse() {
+        use tracing::info;
+        
+        let has_tree = self.parse_tree.is_some();
+        let needs_reparse = self.needs_reparse();
+        info!("get_parse_tree: has_tree={}, needs_reparse={}", has_tree, needs_reparse);
+        
+        if self.parse_tree.is_none() || needs_reparse {
+            info!("Triggering reparse...");
             self.reparse(parser)?;
+        } else {
+            info!("Using existing parse tree");
         }
         Ok(self.parse_tree.as_ref())
     }
@@ -76,18 +85,14 @@ impl Document {
         let source = self.text();
         info!("Reparsing document, source length: {} bytes", source.len());
         
-        // Use incremental parsing if we have an old tree
-        let new_tree = if let Some(old_tree) = &self.parse_tree {
-            info!("Using incremental parsing");
-            parser.parse_incremental(source, Some(old_tree))?
-        } else {
-            info!("Using full parsing");
-            parser.parse(source)?
-        };
+        // TEMPORARY: Always use full parsing to avoid incremental parsing issues
+        // TODO: Fix incremental parsing later for better performance
+        info!("Using full parsing (incremental parsing temporarily disabled)");
+        let new_tree = parser.parse(source)?;
 
         if let Some(tree) = new_tree {
-            // Extract parse errors
-            self.parse_errors = Parser::extract_errors(&tree);
+            // Extract parse errors with source text for better error messages
+            self.parse_errors = Parser::extract_errors_with_source(&tree, source);
             info!("Parse completed: {} errors found", self.parse_errors.len());
             
             self.parse_tree = Some(tree);
@@ -107,7 +112,10 @@ impl Document {
 
     /// Check if document needs reparsing
     fn needs_reparse(&self) -> bool {
-        self.last_parsed.is_none()
+        let needs_reparse = self.last_parsed.is_none();
+        use tracing::info;
+        info!("Document needs reparse: {}", needs_reparse);
+        needs_reparse
     }
 
     /// Get parse errors from the last parse
