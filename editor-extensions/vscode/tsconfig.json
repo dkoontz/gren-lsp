@@ -6,16 +6,12 @@
     "outDir": "out",
     "rootDir": "src",
     "sourceMap": true,
-    "incremental": true
+    "incremental": true,
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true
   },
-  "include": [
-    "src"
-  ],
-  "exclude": [
-    "node_modules",
-    ".vscode-test"
-  ],
-  "references": [
-    { "path": "./client" }
-  ]
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", ".vscode-test", "out"]
 }

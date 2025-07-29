@@ -128,14 +128,17 @@ loc:
     @tokei
 
 # VS Code specific commands
-vscode-install:
-    cd editors/vscode && npm install
-
 vscode-build:
-    cd editors/vscode && npm run compile
+    cd editor-extensions/vscode && npm run build
 
 vscode-package:
-    cd editors/vscode && vsce package
+    cd editor-extensions/vscode && npm run package
+
+vscode-watch:
+    cd editor-extensions/vscode && npm run watch
+
+vscode-clean:
+    cd editor-extensions/vscode && rm -rf out/ node_modules/ tsconfig.tsbuildinfo *.vsix
 
 # Aliases for common commands
 alias b := build

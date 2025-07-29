@@ -20,12 +20,12 @@
 **Description:** Handle textDocument synchronization events to maintain accurate file state.
 
 **Acceptance Criteria:**
-- [ ] Handle textDocument/didOpen notifications
-- [ ] Process textDocument/didChange with incremental updates
-- [ ] Implement textDocument/didClose cleanup
-- [ ] Manage document versions correctly
-- [ ] Integrate with tree-sitter incremental parsing
-- [ ] Maintain document cache with LRU eviction
+- [x] Handle textDocument/didOpen notifications
+- [x] Process textDocument/didChange with incremental updates
+- [x] Implement textDocument/didClose cleanup
+- [x] Manage document versions correctly
+- [x] Integrate with tree-sitter incremental parsing
+- [x] Maintain document cache with LRU eviction
 
 **Technical Notes:**
 - Use lsp-textdocument for version management

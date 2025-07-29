@@ -5,21 +5,34 @@
   "license": "MIT",
   "version": "1.0.0",
   "publisher": "gren-lsp",
-  "categories": ["Programming Languages"],
+  "categories": [
+    "Programming Languages"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dkoontz/gren-lsp"
+  },
   "engines": {
-    "vscode": "^1.75.0"
+    "vscode": "^1.81.0"
   },
   "activationEvents": [
     "onLanguage:gren"
   ],
-  "main": "./client/out/extension",
+  "main": "./out/extension",
   "contributes": {
-    "languages": [{
-      "id": "gren",
-      "aliases": ["Gren", "gren"],
-      "extensions": [".gren"],
-      "configuration": "./language-configuration.json"
-    }],
+    "languages": [
+      {
+        "id": "gren",
+        "aliases": [
+          "Gren",
+          "gren"
+        ],
+        "extensions": [
+          ".gren"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
     "configuration": {
       "type": "object",
       "title": "Gren LSP",
@@ -31,7 +44,11 @@
         },
         "grenLsp.trace.server": {
           "type": "string",
-          "enum": ["off", "messages", "verbose"],
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
           "default": "off",
           "description": "Traces the communication between VS Code and the Gren language server."
         }
@@ -40,12 +57,20 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
-    "compile": "tsc -b",
-    "watch": "tsc -b -w",
-    "postinstall": "cd client && npm install && cd .."
+    "precompile": "npm install",
+    "compile": "tsc",
+    "watch": "tsc -w",
+    "prepackage": "npm run compile",
+    "package": "vsce package",
+    "build": "npm run compile"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^8.1.0"
   },
   "devDependencies": {
     "@types/node": "^20.5.7",
+    "@types/vscode": "^1.81.0",
+    "@vscode/vsce": "^3.6.0",
     "typescript": "^5.2.2"
   }
 }

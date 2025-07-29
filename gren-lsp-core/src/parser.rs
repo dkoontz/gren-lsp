@@ -8,14 +8,21 @@ pub struct Parser {
 
 impl Parser {
     pub fn new() -> Result<Self> {
+        use tracing::info;
+        
+        info!("Creating new parser");
         let mut parser = TreeSitterParser::new();
         
+        info!("Loading Gren grammar");
         // Set Gren language from tree-sitter-gren
         let language = tree_sitter_gren::language();
+        
+        info!("Setting language for parser");
         parser
             .set_language(language)
             .context("Error loading Gren grammar")?;
         
+        info!("Parser created successfully");
         Ok(Self { parser })
     }
 

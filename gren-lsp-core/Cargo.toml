@@ -27,6 +27,9 @@ pathdiff = "0.2.1"
 # Tree-sitter Gren grammar
 tree-sitter-gren = { git = "https://github.com/MaeBrooks/tree-sitter-gren", branch = "main" }
 
+# LRU cache for document management
+lru = "0.12.4"
+
 [dev-dependencies]
 mockall.workspace = true
 proptest.workspace = true

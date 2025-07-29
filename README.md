@@ -22,7 +22,7 @@ A Language Server Protocol implementation for the [Gren programming language](ht
 
 ```bash
 # Clone the repository
-git clone https://github.com/gren-lang/gren-lsp
+git clone https://github.com/dkoontz/gren-lsp
 cd gren-lsp
 
 # Setup development environment
