@@ -1,0 +1,50 @@
+# Rust build artifacts
+/target/
+**/*.rs.bk
+*.pdb
+
+# Cargo
+Cargo.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Database
+*.db
+*.db-shm
+*.db-wal
+
+# Logs
+*.log
+
+# Environment
+.env
+.env.local
+
+# VS Code Extension (when we add it)
+/editors/vscode/out/
+/editors/vscode/node_modules/
+/editors/vscode/*.vsix
+
+# Test coverage
+*.profraw
+*.profdata
+/coverage/
+
+# Benchmarking
+/criterion/
+
+# Documentation
+/target/doc/
+
+# Backup files
+*.bak
+*.tmp

@@ -1,0 +1,29 @@
+[package]
+name = "gren-lsp-core"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Core analysis engine for Gren LSP"
+
+[dependencies]
+# Workspace dependencies
+lsp-types.workspace = true
+lsp-textdocument.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+rusqlite.workspace = true
+tree-sitter.workspace = true
+
+# Path handling
+url = "2.4.1"
+pathdiff = "0.2.1"
+
+[dev-dependencies]
+mockall.workspace = true
+proptest.workspace = true

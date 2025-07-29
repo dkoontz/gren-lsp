@@ -1,0 +1,20 @@
+module TestModule exposing (..)
+
+import Array
+
+type alias User =
+    { name : String
+    , age : Int
+    }
+
+type Message
+    = Hello String
+    | Goodbye
+
+greetUser : User -> String
+greetUser user =
+    "Hello, " ++ user.name
+
+processUsers : Array User -> Array String
+processUsers users =
+    Array.map greetUser users

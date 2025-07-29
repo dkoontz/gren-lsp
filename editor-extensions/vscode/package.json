@@ -1,0 +1,51 @@
+{
+  "name": "gren-lsp",
+  "description": "Language Server Protocol support for the Gren programming language",
+  "author": "Gren LSP Contributors",
+  "license": "MIT",
+  "version": "1.0.0",
+  "publisher": "gren-lsp",
+  "categories": ["Programming Languages"],
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "activationEvents": [
+    "onLanguage:gren"
+  ],
+  "main": "./client/out/extension",
+  "contributes": {
+    "languages": [{
+      "id": "gren",
+      "aliases": ["Gren", "gren"],
+      "extensions": [".gren"],
+      "configuration": "./language-configuration.json"
+    }],
+    "configuration": {
+      "type": "object",
+      "title": "Gren LSP",
+      "properties": {
+        "grenLsp.serverPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the Gren LSP server binary. If empty, will try to find 'gren-lsp' in PATH."
+        },
+        "grenLsp.trace.server": {
+          "type": "string",
+          "enum": ["off", "messages", "verbose"],
+          "default": "off",
+          "description": "Traces the communication between VS Code and the Gren language server."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -b",
+    "watch": "tsc -b -w",
+    "postinstall": "cd client && npm install && cd .."
+  },
+  "devDependencies": {
+    "@types/node": "^20.5.7",
+    "typescript": "^5.2.2"
+  }
+}
