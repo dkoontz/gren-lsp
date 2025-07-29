@@ -51,6 +51,16 @@
           ],
           "default": "off",
           "description": "Traces the communication between VS Code and the Gren language server."
+        },
+        "grenLsp.debug.exportParseTree": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable debug mode to export tree-sitter parse trees for all opened Gren files."
+        },
+        "grenLsp.debug.parseTreeDirectory": {
+          "type": "string",
+          "default": "",
+          "description": "Directory to export parse trees to when debug mode is enabled. If empty, will use system temp directory."
         }
       }
     }

@@ -17,8 +17,11 @@ serde_json.workspace = true
 tracing.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
+chrono.workspace = true
 rusqlite.workspace = true
 tree-sitter.workspace = true
+tokio.workspace = true
+tracing-subscriber.workspace = true
 
 # Path handling
 url = "2.4.1"

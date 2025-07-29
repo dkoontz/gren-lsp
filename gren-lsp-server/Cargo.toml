@@ -19,6 +19,7 @@ name = "gren-lsp"
 path = "src/main.rs"
 
 
+
 [dependencies]
 # Workspace dependencies
 tokio.workspace = true

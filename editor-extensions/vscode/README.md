@@ -57,6 +57,19 @@ The extension supports the following settings:
 - `grenLsp.serverPath`: Path to the Gren LSP server binary (defaults to workspace relative path)
 - `grenLsp.trace.server`: LSP communication tracing level (`off`, `messages`, `verbose`)
 
+#### Debug Settings
+
+For development and debugging purposes:
+
+- `grenLsp.debug.exportParseTree`: Enable debug mode to export tree-sitter parse trees (default: `false`)
+- `grenLsp.debug.parseTreeDirectory`: Directory to export parse trees to (defaults to system temp directory)
+
+When `exportParseTree` is enabled, the extension will:
+- Export parse trees for all opened `.gren` files as `.sexp` files
+- Show a notification with the export directory location
+- Provide a link to open the directory in your file manager
+- Create detailed debug files with source code and AST structure for development
+
 ### Troubleshooting
 
 - Check the "Gren LSP" output channel for server logs

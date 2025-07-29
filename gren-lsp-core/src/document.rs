@@ -2,8 +2,10 @@ use crate::{ParseError, Parser};
 use anyhow::Result;
 use lsp_textdocument::FullTextDocument;
 use lsp_types::*;
+use std::path::Path;
 use std::time::Instant;
 use tree_sitter::Tree;
+use tracing::info;
 
 pub struct Document {
     text_document: FullTextDocument,
@@ -144,5 +146,56 @@ impl Document {
     /// Get the last modification time (version)
     pub fn last_modified(&self) -> i32 {
         self.version()
+    }
+
+    /// Export the current parse tree to a file for debugging
+    pub fn export_parse_tree(&self, export_dir: &Path) -> Result<()> {
+        if let Some(ref tree) = self.parse_tree {
+            // Create a safe filename from the URI
+            let filename = self.create_debug_filename();
+            let export_path = export_dir.join(filename);
+            
+            info!("Exporting parse tree for {} to {}", self.uri, export_path.display());
+            
+            // Export the tree in S-expression format
+            let tree_content = tree.root_node().to_sexp();
+            
+            // Also include the source content for reference
+            let debug_content = format!(
+                "; Parse tree for: {}\n; Version: {}\n; Generated at: {}\n\n; Source content:\n{}\n\n; Parse tree:\n{}",
+                self.uri,
+                self.version(),
+                chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC"),
+                self.text().lines()
+                    .enumerate()
+                    .map(|(i, line)| format!("; {:3}: {}", i + 1, line))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                tree_content
+            );
+            
+            std::fs::write(&export_path, debug_content)?;
+            info!("Parse tree exported successfully to {}", export_path.display());
+        } else {
+            info!("No parse tree available for export for {}", self.uri);
+        }
+        
+        Ok(())
+    }
+
+    /// Create a safe filename for debug export based on the document URI
+    fn create_debug_filename(&self) -> String {
+        // Convert URI to a safe filename
+        let uri_str = self.uri.as_str();
+        let mut filename = uri_str
+            .replace("file://", "")
+            .replace('/', "_")
+            .replace('\\', "_")
+            .replace(':', "_");
+        
+        // Add version and timestamp for uniqueness
+        filename.push_str(&format!("_v{}.sexp", self.version()));
+        
+        filename
     }
 }

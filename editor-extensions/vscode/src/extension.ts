@@ -1,5 +1,6 @@
 import * as path from "path";
 import * as fs from "fs";
+import * as os from "os";
 import { workspace, ExtensionContext, window } from "vscode";
 
 import {
@@ -67,10 +68,56 @@ export function activate(context: ExtensionContext) {
     window.showErrorMessage(errorMsg);
     return;
   }
+
+  // Handle debug parse tree export settings
+  const exportParseTree = config.get<boolean>('debug.exportParseTree', false);
+  let parseTreeArgs: string[] = [];
+  
+  if (exportParseTree) {
+    let parseTreeDir = config.get<string>('debug.parseTreeDirectory', '');
+    
+    if (!parseTreeDir) {
+      // Use default directory in temp folder
+      parseTreeDir = path.join(os.tmpdir(), 'gren-lsp-parse-trees');
+    }
+    
+    // Ensure directory exists
+    try {
+      if (!fs.existsSync(parseTreeDir)) {
+        fs.mkdirSync(parseTreeDir, { recursive: true });
+      }
+      
+      // Verify we can write to the directory
+      fs.accessSync(parseTreeDir, fs.constants.W_OK);
+      
+      parseTreeArgs = ['--debug-export-trees', parseTreeDir];
+      console.log(`Parse tree export enabled, directory: ${parseTreeDir}`);
+      
+      // Show user notification about debug mode
+      window.showInformationMessage(
+        `Gren LSP: Parse tree debug export is enabled. Trees will be saved to: ${parseTreeDir}`,
+        'Open Folder'
+      ).then(selection => {
+        if (selection === 'Open Folder') {
+          // Open the folder in file explorer/finder (cross-platform)
+          const { exec } = require('child_process');
+          const command = process.platform === 'win32' ? 'explorer' : 
+                         process.platform === 'darwin' ? 'open' : 'xdg-open';
+          exec(`${command} "${parseTreeDir}"`);
+        }
+      });
+      
+    } catch (err) {
+      const errorMsg = `Failed to create or access parse tree directory: ${parseTreeDir}`;
+      console.error(errorMsg, err);
+      window.showErrorMessage(`${errorMsg}\n\nDisabling parse tree export.`);
+      parseTreeArgs = []; // Disable if directory setup fails
+    }
+  }
   
   const serverExecutable: Executable = {
     command: serverPath,
-    args: [],
+    args: parseTreeArgs,
     options: {
       env: {
         ...process.env,

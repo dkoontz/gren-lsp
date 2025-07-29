@@ -4,6 +4,7 @@ use lru::LruCache;
 use lsp_types::*;
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
+use std::path::Path;
 use tracing::{info, warn};
 
 const DEFAULT_CACHE_SIZE: usize = 100;
@@ -337,6 +338,50 @@ impl Workspace {
             }
         }
 
+        Ok(())
+    }
+
+    /// Export parse trees for all open documents to the specified directory
+    pub fn export_all_parse_trees(&self, export_dir: &Path) -> Result<()> {
+        info!("Exporting parse trees for {} documents to {}", 
+              self.documents.len(), export_dir.display());
+        
+        // Create the export directory if it doesn't exist
+        std::fs::create_dir_all(export_dir)?;
+        
+        let mut exported_count = 0;
+        let mut error_count = 0;
+        
+        for (uri, document) in &self.documents {
+            match document.export_parse_tree(export_dir) {
+                Ok(()) => {
+                    exported_count += 1;
+                }
+                Err(e) => {
+                    warn!("Failed to export parse tree for {}: {}", uri, e);
+                    error_count += 1;
+                }
+            }
+        }
+        
+        info!("Parse tree export completed: {} exported, {} errors", 
+              exported_count, error_count);
+        
+        Ok(())
+    }
+
+    /// Export parse tree for a specific document
+    pub fn export_parse_tree_for_document(&self, uri: &Url, export_dir: &Path) -> Result<()> {
+        if let Some(document) = self.documents.get(uri) {
+            // Create the export directory if it doesn't exist
+            std::fs::create_dir_all(export_dir)?;
+            
+            document.export_parse_tree(export_dir)?;
+            info!("Parse tree exported for document: {}", uri);
+        } else {
+            warn!("Document not found for parse tree export: {}", uri);
+        }
+        
         Ok(())
     }
 }

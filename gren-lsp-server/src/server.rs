@@ -1,6 +1,7 @@
 use gren_lsp_core::Workspace;
 use gren_lsp_protocol::handlers::Handlers;
 use lsp_types::*;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower_lsp::jsonrpc::Result;
@@ -11,10 +12,15 @@ pub struct GrenLanguageServer {
     client: Client,
     workspace: Arc<RwLock<Workspace>>,
     client_capabilities: Arc<RwLock<Option<ClientCapabilities>>>,
+    debug_export_dir: Option<PathBuf>,
 }
 
 impl GrenLanguageServer {
     pub fn new(client: Client) -> Self {
+        Self::new_with_debug(client, None)
+    }
+
+    pub fn new_with_debug(client: Client, debug_export_dir: Option<PathBuf>) -> Self {
         info!("Initializing language server");
 
         // Initialize workspace with error handling
@@ -29,11 +35,20 @@ impl GrenLanguageServer {
             }
         };
 
+        if let Some(ref debug_dir) = debug_export_dir {
+            info!("Debug export directory configured: {}", debug_dir.display());
+            // Create the debug directory if it doesn't exist
+            if let Err(e) = std::fs::create_dir_all(debug_dir) {
+                error!("Failed to create debug export directory: {}", e);
+            }
+        }
+
         info!("Language server initialization complete");
         Self {
             client,
             workspace: Arc::new(RwLock::new(workspace)),
             client_capabilities: Arc::new(RwLock::new(None)),
+            debug_export_dir,
         }
     }
 }
@@ -129,6 +144,13 @@ impl LanguageServer for GrenLanguageServer {
             uri
         );
 
+        // Export parse tree if debug mode is enabled
+        if let Some(ref debug_dir) = self.debug_export_dir {
+            if let Err(e) = workspace.export_parse_tree_for_document(&uri, debug_dir) {
+                error!("Failed to export parse tree for {}: {}", uri, e);
+            }
+        }
+
         // Log workspace stats
         let stats = workspace.stats();
         info!("Workspace stats: {} documents open", stats.document_count);
@@ -159,6 +181,13 @@ impl LanguageServer for GrenLanguageServer {
             diagnostics.len(),
             uri
         );
+
+        // Export parse tree if debug mode is enabled
+        if let Some(ref debug_dir) = self.debug_export_dir {
+            if let Err(e) = workspace.export_parse_tree_for_document(&uri, debug_dir) {
+                error!("Failed to export parse tree for {}: {}", uri, e);
+            }
+        }
 
         // Publish diagnostics
         self.client
