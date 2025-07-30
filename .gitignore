@@ -48,3 +48,7 @@ Thumbs.db
 # Backup files
 *.bak
 *.tmp
+
+# Gren artifacts
+gren_packages
+.gren

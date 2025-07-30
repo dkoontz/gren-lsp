@@ -5,7 +5,7 @@ use std::fs;
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = env::args().collect();
-    
+
     let gren_source = if args.len() > 1 {
         // Read from file argument
         let filename = &args[1];
@@ -20,7 +20,8 @@ length str = String.length str
 
 add : Int -> Int -> Int
 add x y = x + y
-"#.to_string()
+"#
+        .to_string()
     };
 
     let mut parser = Parser::new()?;

@@ -107,7 +107,16 @@ impl LanguageServer for GrenLanguageServer {
                 }),
                 // TODO: Implement these features
                 references_provider: Some(OneOf::Left(true)),
-                // code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
+                code_action_provider: Some(CodeActionProviderCapability::Options(
+                    CodeActionOptions {
+                        code_action_kinds: Some(vec![
+                            CodeActionKind::QUICKFIX,
+                            CodeActionKind::SOURCE_ORGANIZE_IMPORTS,
+                        ]),
+                        work_done_progress_options: WorkDoneProgressOptions::default(),
+                        resolve_provider: Some(false),
+                    },
+                )),
                 rename_provider: Some(OneOf::Left(true)),
                 ..Default::default()
             },
@@ -142,15 +151,16 @@ impl LanguageServer for GrenLanguageServer {
             return;
         }
 
-        // Get comprehensive diagnostics for the newly opened document (syntax + compiler)
-        let diagnostics = match workspace.get_document_diagnostics(&uri).await {
-            Ok(diags) => {
+        // Get comprehensive diagnostics and global errors for the newly opened document
+        let (diagnostics, global_errors) = match workspace.get_document_diagnostics_with_global_errors(&uri).await {
+            Ok((diags, global_errs)) => {
                 info!(
-                    "Found {} comprehensive diagnostics for document: {}",
+                    "Found {} comprehensive diagnostics and {} global errors for document: {}",
                     diags.len(),
+                    global_errs.len(),
                     uri
                 );
-                diags
+                (diags, global_errs)
             }
             Err(e) => {
                 warn!("Failed to get comprehensive diagnostics for {}: {}", uri, e);
@@ -161,9 +171,12 @@ impl LanguageServer for GrenLanguageServer {
                     syntax_diagnostics.len(),
                     uri
                 );
-                syntax_diagnostics
+                (syntax_diagnostics, Vec::new())
             }
         };
+
+        // Log workspace stats before we potentially drop the workspace lock
+        let stats = workspace.stats();
 
         // Export parse tree if debug mode is enabled
         if let Some(ref debug_dir) = self.debug_export_dir {
@@ -172,8 +185,13 @@ impl LanguageServer for GrenLanguageServer {
             }
         }
 
-        // Log workspace stats
-        let stats = workspace.stats();
+        // Send global error notifications if any were found
+        if !global_errors.is_empty() {
+            // Need to drop the workspace lock before calling async notification method
+            drop(workspace);
+            self.send_global_error_notifications(global_errors).await;
+        }
+
         info!("Workspace stats: {} documents open", stats.document_count);
 
         // Publish diagnostics
@@ -222,18 +240,25 @@ impl LanguageServer for GrenLanguageServer {
         let uri = params.text_document.uri.clone();
         let mut workspace = self.workspace.write().await;
 
-        // Force refresh diagnostics after save (bypasses cache)
-        let diagnostics = match workspace.force_refresh_diagnostics(&uri).await {
-            Ok(diags) => {
-                info!("Found {} diagnostics after save for: {}", diags.len(), uri);
-                diags
+        // Force refresh diagnostics and global errors after save (bypasses cache)
+        let (diagnostics, global_errors) = match workspace.force_refresh_diagnostics_with_global_errors(&uri).await {
+            Ok((diags, global_errs)) => {
+                info!("Found {} diagnostics and {} global errors after save for: {}", diags.len(), global_errs.len(), uri);
+                (diags, global_errs)
             }
             Err(e) => {
                 warn!("Failed to get diagnostics after save for {}: {}", uri, e);
                 // Fallback to syntax-only diagnostics
-                workspace.get_diagnostics(&uri)
+                (workspace.get_diagnostics(&uri), Vec::new())
             }
         };
+
+        // Send global error notifications if any were found
+        if !global_errors.is_empty() {
+            // Need to drop the workspace lock before calling async notification method
+            drop(workspace);
+            self.send_global_error_notifications(global_errors).await;
+        }
 
         // Publish fresh diagnostics
         self.client
@@ -300,6 +325,11 @@ impl LanguageServer for GrenLanguageServer {
     async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
         let handlers = Handlers::new(self.workspace.clone());
         handlers.find_references(params).await
+    }
+
+    async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
+        let handlers = Handlers::new(self.workspace.clone());
+        handlers.code_action(params).await
     }
 
     async fn rename(&self, params: RenameParams) -> Result<Option<WorkspaceEdit>> {
@@ -669,6 +699,9 @@ impl GrenLanguageServer {
         let client = self.client.clone();
         let workspace = self.workspace.clone();
         let pending_diagnostics = self.pending_diagnostics.clone();
+        
+        // Clone the client for global error notifications
+        let client_for_notifications = self.client.clone();
 
         // Spawn a task to handle the debounced update
         tokio::spawn(async move {
@@ -695,17 +728,18 @@ impl GrenLanguageServer {
                     pending.remove(&uri_clone);
                 }
 
-                // Get comprehensive diagnostics (syntax + compiler)
-                let diagnostics = {
+                // Get comprehensive diagnostics and global errors (syntax + compiler)
+                let (diagnostics, global_errors) = {
                     let mut workspace = workspace.write().await;
-                    match workspace.get_document_diagnostics(&uri_clone).await {
-                        Ok(diags) => {
+                    match workspace.get_document_diagnostics_with_global_errors(&uri_clone).await {
+                        Ok((diags, global_errs)) => {
                             info!(
-                                "Found {} real-time diagnostics for: {}",
+                                "Found {} real-time diagnostics and {} global errors for: {}",
                                 diags.len(),
+                                global_errs.len(),
                                 uri_clone
                             );
-                            diags
+                            (diags, global_errs)
                         }
                         Err(e) => {
                             warn!(
@@ -719,10 +753,33 @@ impl GrenLanguageServer {
                                 syntax_diagnostics.len(),
                                 uri_clone
                             );
-                            syntax_diagnostics
+                            (syntax_diagnostics, Vec::new())
                         }
                     }
                 };
+
+                // Send global error notifications if any were found
+                if !global_errors.is_empty() {
+                    for global_error in global_errors {
+                        let message = match global_error.title.as_str() {
+                            "GREN VERSION MISMATCH" => {
+                                format!("🚨 Gren Version Mismatch\n\n{}\n\nPlease update your Gren compiler or modify your gren.json file to match.", global_error.message)
+                            }
+                            _ => {
+                                format!("🚨 Compiler Error: {}\n\n{}", global_error.title, global_error.message)
+                            }
+                        };
+
+                        let message_type = match global_error.severity {
+                            gren_lsp_core::compiler::DiagnosticSeverity::Error => MessageType::ERROR,
+                            gren_lsp_core::compiler::DiagnosticSeverity::Warning => MessageType::WARNING,
+                            gren_lsp_core::compiler::DiagnosticSeverity::Info => MessageType::INFO,
+                        };
+
+                        info!("📢 Sending global error notification: {}", global_error.title);
+                        client_for_notifications.show_message(message_type, message).await;
+                    }
+                }
 
                 // Publish diagnostics
                 client
@@ -732,5 +789,31 @@ impl GrenLanguageServer {
                 info!("⚡ Skipping outdated diagnostic update for: {}", uri_clone);
             }
         });
+    }
+
+    /// Send global error notifications to the client
+    async fn send_global_error_notifications(&self, global_errors: Vec<gren_lsp_core::compiler::GlobalError>) {
+        for global_error in global_errors {
+            let message = match global_error.title.as_str() {
+                "GREN VERSION MISMATCH" => {
+                    // Extract version information from the message for a more actionable notification
+                    format!("🚨 Gren Version Mismatch\n\n{}\n\nPlease update your Gren compiler or modify your gren.json file to match.", global_error.message)
+                }
+                _ => {
+                    format!("🚨 Compiler Error: {}\n\n{}", global_error.title, global_error.message)
+                }
+            };
+
+            // Use MessageType::Error for critical issues like version mismatches
+            let message_type = match global_error.severity {
+                gren_lsp_core::compiler::DiagnosticSeverity::Error => MessageType::ERROR,
+                gren_lsp_core::compiler::DiagnosticSeverity::Warning => MessageType::WARNING,
+                gren_lsp_core::compiler::DiagnosticSeverity::Info => MessageType::INFO,
+            };
+
+            // Send notification to VS Code
+            info!("📢 Sending global error notification: {}", global_error.title);
+            self.client.show_message(message_type, message).await;
+        }
     }
 }

@@ -30,8 +30,10 @@ pub struct GrenCompiler {
 pub struct CompilationResult {
     /// Whether compilation succeeded
     pub success: bool,
-    /// Compilation errors and warnings
+    /// Compilation errors and warnings tied to specific file locations
     pub diagnostics: Vec<CompilerDiagnostic>,
+    /// Global errors not tied to specific file locations
+    pub global_errors: Vec<GlobalError>,
     /// Compilation timestamp
     pub timestamp: SystemTime,
     /// Hash of the source content compiled
@@ -71,6 +73,19 @@ pub struct DiagnosticLocation {
     pub end_column: Option<u32>,
 }
 
+/// A global error that can't be tied to a specific file location
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GlobalError {
+    /// Error severity
+    pub severity: DiagnosticSeverity,
+    /// Error title
+    pub title: String,
+    /// Detailed error message
+    pub message: String,
+    /// File path related to the error (if any)
+    pub path: Option<PathBuf>,
+}
+
 /// JSON structure returned by gren make --report=json
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type")]
@@ -78,6 +93,11 @@ pub struct DiagnosticLocation {
 enum GrenCompilerOutput {
     CompileErrors {
         errors: Vec<GrenError>,
+    },
+    Error {
+        path: String,
+        title: String,
+        message: serde_json::Value,
     },
     #[serde(other)]
     Other,
@@ -111,6 +131,46 @@ struct GrenPosition {
 }
 
 impl GrenCompiler {
+    /// Convert a file path to a Gren module name for 0.6.0+ compilation
+    /// Examples: 
+    /// - "src/Main.gren" → "Main"
+    /// - "src/Foo/Bar.gren" → "Foo.Bar"
+    fn file_path_to_module_name(&self, file_path: &Path) -> Result<String> {
+        // Convert absolute path to relative path from working directory
+        let relative_path = if file_path.is_absolute() {
+            file_path.strip_prefix(&self.working_dir)
+                .map_err(|_| anyhow!("File path {} is not within working directory {}", 
+                                   file_path.display(), self.working_dir.display()))?
+        } else {
+            file_path
+        };
+
+        // Remove the "src/" prefix if present
+        let path_without_src = if relative_path.starts_with("src") {
+            relative_path.strip_prefix("src")
+                .map_err(|_| anyhow!("Failed to strip src prefix from {}", relative_path.display()))?
+        } else {
+            relative_path
+        };
+
+        // Remove the .gren extension
+        let path_without_extension = path_without_src.with_extension("");
+        
+        // Convert path separators to dots for module name
+        let module_name = path_without_extension
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join(".");
+
+        if module_name.is_empty() {
+            return Err(anyhow!("Could not determine module name from path: {}", file_path.display()));
+        }
+
+        info!("🔄 Converted file path {} to module name: {}", file_path.display(), module_name);
+        Ok(module_name)
+    }
+
     /// Create a new Gren compiler integration
     pub fn new(working_dir: PathBuf) -> Result<Self> {
         let gren_path = Self::find_gren_executable()?;
@@ -127,18 +187,67 @@ impl GrenCompiler {
 
     /// Find the gren executable in PATH
     fn find_gren_executable() -> Result<PathBuf> {
+        // Log the current PATH for debugging
+        if let Ok(path_env) = std::env::var("PATH") {
+            info!("🔍 Current PATH: {}", path_env);
+        } else {
+            warn!("⚠️ No PATH environment variable found");
+        }
+
         // Try common locations
         let candidates = vec!["gren", "/usr/local/bin/gren", "/opt/homebrew/bin/gren"];
 
         for candidate in candidates {
-            if let Ok(output) = Command::new(candidate)
+            info!("🔍 Trying Gren compiler candidate: {}", candidate);
+            
+            match Command::new(candidate)
                 .arg("--help")
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .status()
             {
-                if output.success() {
-                    return Ok(PathBuf::from(candidate));
+                Ok(output) => {
+                    if output.success() {
+                        info!("✅ Found working Gren compiler: {}", candidate);
+                        
+                        // Resolve to absolute path to avoid PATH issues when running from temp directories
+                        let absolute_path = if candidate == "gren" {
+                            // For the generic "gren" command, resolve the actual path using 'which'
+                            match Command::new("which")
+                                .arg("gren")
+                                .output()
+                            {
+                                Ok(which_output) if which_output.status.success() => {
+                                    let path_str = String::from_utf8_lossy(&which_output.stdout).trim().to_string();
+                                    info!("🔍 Resolved 'gren' to absolute path: {}", path_str);
+                                    PathBuf::from(path_str)
+                                }
+                                _ => {
+                                    warn!("⚠️ Failed to resolve 'gren' to absolute path, using relative path");
+                                    PathBuf::from(candidate)
+                                }
+                            }
+                        } else {
+                            // Already an absolute path
+                            PathBuf::from(candidate)
+                        };
+                        
+                        // Get version information for debugging
+                        if let Ok(version_output) = Command::new(&absolute_path)
+                            .arg("--version")
+                            .output()
+                        {
+                            let version_str = String::from_utf8_lossy(&version_output.stdout);
+                            info!("📋 Gren compiler version: {}", version_str.trim());
+                        }
+                        
+                        return Ok(absolute_path);
+                    } else {
+                        info!("❌ Candidate {} exists but --help failed", candidate);
+                    }
+                }
+                Err(e) => {
+                    info!("❌ Candidate {} not accessible: {}", candidate, e);
                 }
             }
         }
@@ -180,9 +289,12 @@ impl GrenCompiler {
     async fn run_compiler(&mut self, file_path: &Path) -> Result<CompilationResult> {
         let project_type = self.detect_project_type().await?;
 
+        // Convert file path to module name for Gren 0.6.0+ compatibility
+        let module_name = self.file_path_to_module_name(file_path)?;
+
         let mut cmd = AsyncCommand::new(&self.gren_path);
         cmd.arg("make")
-            .arg(file_path)
+            .arg(&module_name)
             .arg("--report=json")
             .current_dir(&self.working_dir)
             .stdout(Stdio::piped())
@@ -218,12 +330,19 @@ impl GrenCompiler {
             info!("Compiler stderr: {}", stderr);
         }
 
-        let diagnostics = self.parse_compiler_output(&stderr)?;
+        let (diagnostics, global_errors) = self.parse_compiler_output(&stderr)?;
         info!("📋 Found {} compiler diagnostics", diagnostics.len());
+        if !global_errors.is_empty() {
+            info!("🚨 Found {} global compiler errors", global_errors.len());
+            for error in &global_errors {
+                info!("   - {}: {}", error.title, error.message);
+            }
+        }
 
         Ok(CompilationResult {
             success,
             diagnostics,
+            global_errors,
             timestamp: SystemTime::now(),
             content_hash: self.calculate_content_hash(file_path)?,
         })
@@ -237,9 +356,51 @@ impl GrenCompiler {
     ) -> Result<CompilationResult> {
         let project_type = self.detect_project_type().await?;
 
+        // Log the exact compiler path being used for debugging
+        info!("🔍 Using Gren compiler path: {}", self.gren_path.display());
+        info!("🔍 Compiler working directory: {}", working_dir.display());
+        
+        // Test the compiler version from this exact location for debugging
+        if let Ok(version_check) = Command::new(&self.gren_path)
+            .arg("--version")
+            .current_dir(working_dir)
+            .output()
+        {
+            let version_str = String::from_utf8_lossy(&version_check.stdout);
+            info!("🔍 Compiler version check from temp dir: {}", version_str.trim());
+        } else {
+            warn!("⚠️ Failed to check compiler version from temp directory");
+        }
+        
+        // Also test from the original working directory for comparison
+        if let Ok(version_check_orig) = Command::new(&self.gren_path)
+            .arg("--version")
+            .current_dir(&self.working_dir)
+            .output()
+        {
+            let version_str = String::from_utf8_lossy(&version_check_orig.stdout);
+            info!("🔍 Compiler version check from original dir: {}", version_str.trim());
+        }
+        
+        // Check if there are any environment differences
+        info!("🔍 NODE_PATH in temp compilation: {:?}", std::env::var("NODE_PATH"));
+        info!("🔍 Current working dir: {:?}", std::env::current_dir());
+
+        // Convert file path to module name for Gren 0.6.0+ compatibility
+        // For temp directory compilation, we need to determine the module name relative to the temp directory
+        let module_name = if let Some(file_name) = file_path.file_stem() {
+            // For temp compilation, we typically have a single file in the temp src directory
+            // The module name is just the file name without extension
+            file_name.to_string_lossy().to_string()
+        } else {
+            return Err(anyhow!("Could not determine module name from temp file path: {}", file_path.display()));
+        };
+
+        info!("🔄 Using module name for temp compilation: {}", module_name);
+
         let mut cmd = AsyncCommand::new(&self.gren_path);
         cmd.arg("make")
-            .arg(file_path)
+            .arg(&module_name)
             .arg("--report=json")
             .current_dir(working_dir) // Use the provided working directory
             .stdout(Stdio::piped())
@@ -257,6 +418,11 @@ impl GrenCompiler {
         );
         info!("📂 Working directory: {}", working_dir.display());
         debug!("Command: {:?}", cmd);
+        
+        // Debug: Show the exact command that will be executed
+        let output_arg = if project_type == ProjectType::Application { " --output=/dev/null" } else { "" };
+        info!("🔍 Full command: {} make {} --report=json{}", 
+              self.gren_path.display(), module_name, output_arg);
 
         let start_time = std::time::Instant::now();
         let output = cmd.output().await?;
@@ -275,12 +441,19 @@ impl GrenCompiler {
             info!("Compiler stderr: {}", stderr);
         }
 
-        let diagnostics = self.parse_compiler_output(&stderr)?;
+        let (diagnostics, global_errors) = self.parse_compiler_output(&stderr)?;
         info!("📋 Found {} compiler diagnostics", diagnostics.len());
+        if !global_errors.is_empty() {
+            info!("🚨 Found {} global compiler errors", global_errors.len());
+            for error in &global_errors {
+                info!("   - {}: {}", error.title, error.message);
+            }
+        }
 
         Ok(CompilationResult {
             success,
             diagnostics,
+            global_errors,
             timestamp: SystemTime::now(),
             content_hash: self.calculate_content_hash(file_path)?,
         })
@@ -362,12 +535,13 @@ impl GrenCompiler {
     }
 
     /// Parse JSON output from Gren compiler
-    fn parse_compiler_output(&self, output: &str) -> Result<Vec<CompilerDiagnostic>> {
+    fn parse_compiler_output(&self, output: &str) -> Result<(Vec<CompilerDiagnostic>, Vec<GlobalError>)> {
         let mut diagnostics = Vec::new();
+        let mut global_errors = Vec::new();
 
         // Handle empty output
         if output.trim().is_empty() {
-            return Ok(diagnostics);
+            return Ok((diagnostics, global_errors));
         }
 
         // Try to parse as JSON
@@ -392,6 +566,16 @@ impl GrenCompiler {
                         }
                     }
                 }
+                GrenCompilerOutput::Error { path, title, message } => {
+                    info!("🚨 Global compiler error detected: {}", title);
+                    let global_error = GlobalError {
+                        severity: DiagnosticSeverity::Error,
+                        title: title.clone(),
+                        message: self.extract_message_text(message),
+                        path: if path.is_empty() { None } else { Some(PathBuf::from(path)) },
+                    };
+                    global_errors.push(global_error);
+                }
                 GrenCompilerOutput::Other => {
                     warn!("Unknown compiler output format, ignoring");
                 }
@@ -412,7 +596,7 @@ impl GrenCompiler {
             }
         }
 
-        Ok(diagnostics)
+        Ok((diagnostics, global_errors))
     }
 
     /// Extract readable text from JSON message value
@@ -833,9 +1017,10 @@ mod tests {
         // Test with actual Gren compiler output format
         let test_json = r#"{"type":"compile-errors","errors":[{"path":"/Users/david/dev/gren-lang/core/src/String.gren","name":"String","problems":[{"title":"TOO MANY ARGS","region":{"start":{"line":154,"column":9},"end":{"line":154,"column":19}},"message":["The `String` type needs 0 arguments, but I see 1 instead:\n\n154| count : String Int\n             ",{"bold":false,"underline":false,"color":"RED","string":"^^^^^^^^^^"},"\nWhich is the extra one? Maybe some parentheses are missing?"]}]}]}"#;
 
-        let diagnostics = compiler.parse_compiler_output(test_json).unwrap();
+        let (diagnostics, global_errors) = compiler.parse_compiler_output(test_json).unwrap();
 
         assert_eq!(diagnostics.len(), 1);
+        assert_eq!(global_errors.len(), 0);
 
         let diag = &diagnostics[0];
         assert_eq!(diag.title, "TOO MANY ARGS");
@@ -854,5 +1039,35 @@ mod tests {
         assert_eq!(location.column, 9);
         assert_eq!(location.end_line, Some(154));
         assert_eq!(location.end_column, Some(19));
+    }
+
+    #[test]
+    fn test_global_error_parsing() {
+        let temp_dir = TempDir::new().unwrap();
+        let compiler = GrenCompiler::new(temp_dir.path().to_path_buf()).unwrap_or_else(|_| {
+            // Create a mock compiler for testing
+            GrenCompiler {
+                gren_path: PathBuf::from("gren"),
+                working_dir: temp_dir.path().to_path_buf(),
+                cache: std::collections::HashMap::new(),
+                project_type_cache: None,
+            }
+        });
+
+        // Test version mismatch error parsing
+        let version_mismatch_json = r#"{"type":"error","path":"gren.json","title":"GREN VERSION MISMATCH","message":["Your gren.json says this application needs a different version of Gren.\n\nIt requires ",{"bold":false,"underline":false,"color":"GREEN","string":"0.5.4"},", but you are using ",{"bold":false,"underline":false,"color":"RED","string":"0.5.3"}," right now."]}"#;
+
+        let (diagnostics, global_errors) = compiler.parse_compiler_output(version_mismatch_json).unwrap();
+
+        // Should have no regular diagnostics, but one global error
+        assert_eq!(diagnostics.len(), 0);
+        assert_eq!(global_errors.len(), 1);
+
+        let global_error = &global_errors[0];
+        assert_eq!(global_error.title, "GREN VERSION MISMATCH");
+        assert!(global_error.message.contains("0.5.4"));
+        assert!(global_error.message.contains("0.5.3"));
+        assert_eq!(global_error.path, Some(PathBuf::from("gren.json")));
+        assert!(matches!(global_error.severity, DiagnosticSeverity::Error));
     }
 }

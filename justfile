@@ -144,7 +144,7 @@ vscode-install:
     cd editor-extensions/vscode && npm run install-extension
 
 # Build LSP server and install VS Code extension
-vscode-dev: build vscode-install
+vscode-dev: build vscode-build vscode-install
     @echo "✅ LSP server built and VS Code extension installed!"
     @echo "💡 You can now open a Gren project in VS Code to test the extension"
 

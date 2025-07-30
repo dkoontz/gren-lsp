@@ -464,6 +464,7 @@ impl Workspace {
                     return Ok(crate::compiler::CompilationResult {
                         success: true,
                         diagnostics: Vec::new(),
+                        global_errors: Vec::new(),
                         timestamp: std::time::SystemTime::now(),
                         content_hash: 0,
                     });
@@ -513,6 +514,12 @@ impl Workspace {
 
     /// Force refresh diagnostics for a specific document
     pub async fn force_refresh_diagnostics(&mut self, uri: &Url) -> Result<Vec<Diagnostic>> {
+        let (diagnostics, _global_errors) = self.force_refresh_diagnostics_with_global_errors(uri).await?;
+        Ok(diagnostics)
+    }
+
+    /// Force refresh diagnostics and global errors for a specific document
+    pub async fn force_refresh_diagnostics_with_global_errors(&mut self, uri: &Url) -> Result<(Vec<Diagnostic>, Vec<crate::compiler::GlobalError>)> {
         info!("🔄 Force refreshing diagnostics for {}", uri);
 
         // Invalidate compiler cache for this file
@@ -522,8 +529,8 @@ impl Workspace {
             }
         }
 
-        // Get fresh diagnostics
-        self.get_document_diagnostics(uri).await
+        // Get fresh diagnostics and global errors
+        self.get_document_diagnostics_with_global_errors(uri).await
     }
 
     /// Detect if a file is a project configuration file that should trigger cache invalidation
@@ -541,13 +548,19 @@ impl Workspace {
 
     /// Get compiler diagnostics for a document
     pub async fn get_document_diagnostics(&mut self, uri: &Url) -> Result<Vec<Diagnostic>> {
+        let (diagnostics, _global_errors) = self.get_document_diagnostics_with_global_errors(uri).await?;
+        Ok(diagnostics)
+    }
+
+    /// Get compiler diagnostics and global errors for a document
+    pub async fn get_document_diagnostics_with_global_errors(&mut self, uri: &Url) -> Result<(Vec<Diagnostic>, Vec<crate::compiler::GlobalError>)> {
         // Use only compiler diagnostics - they provide comprehensive and accurate error messages
         if self.has_compiler() {
             match self.compile_document(uri).await {
                 Ok(result) => {
                     let compiler_diagnostics =
                         compiler_diagnostics_to_lsp(&result.diagnostics, uri);
-                    return Ok(compiler_diagnostics);
+                    return Ok((compiler_diagnostics, result.global_errors));
                 }
                 Err(e) => {
                     // Don't fail the whole operation if compilation fails
@@ -556,9 +569,9 @@ impl Workspace {
             }
         }
 
-        // If no compiler is available, return empty diagnostics
+        // If no compiler is available, return empty diagnostics and global errors
         // Tree-sitter is used only for symbol navigation, not error reporting
-        Ok(Vec::new())
+        Ok((Vec::new(), Vec::new()))
     }
 
     /// Get comprehensive diagnostics for all open documents
