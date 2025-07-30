@@ -150,6 +150,78 @@ impl SymbolIndex {
         Ok(symbols)
     }
 
+    pub fn find_exact_symbol(&self, name: &str) -> SqlResult<Vec<Symbol>> {
+        let connection = self.connection.lock().unwrap();
+        let mut stmt = connection.prepare(
+            "SELECT name, kind, file_uri, start_line, start_character, end_line, end_character, 
+             container_name, type_signature, documentation
+             FROM symbols WHERE name = ?1",
+        )?;
+
+        let symbol_iter = stmt.query_map([name], |row| {
+            let uri = Url::parse(&row.get::<_, String>(2)?).map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    2,
+                    rusqlite::types::Type::Text,
+                    Box::new(e),
+                )
+            })?;
+
+            let kind_str: String = row.get(1)?;
+            let kind = match kind_str.as_str() {
+                "Function" => SymbolKind::FUNCTION,
+                "Constructor" => SymbolKind::CONSTRUCTOR,
+                "Module" => SymbolKind::MODULE,
+                "Class" => SymbolKind::CLASS,
+                "Variable" => SymbolKind::VARIABLE,
+                "Field" => SymbolKind::FIELD,
+                _ => SymbolKind::VARIABLE,
+            };
+
+            Ok(Symbol {
+                name: row.get(0)?,
+                kind,
+                location: Location::new(
+                    uri,
+                    Range::new(
+                        Position::new(row.get(3)?, row.get(4)?),
+                        Position::new(row.get(5)?, row.get(6)?),
+                    ),
+                ),
+                container_name: {
+                    let container: String = row.get(7)?;
+                    if container.is_empty() {
+                        None
+                    } else {
+                        Some(container)
+                    }
+                },
+                type_signature: {
+                    let sig: String = row.get(8)?;
+                    if sig.is_empty() {
+                        None
+                    } else {
+                        Some(sig)
+                    }
+                },
+                documentation: {
+                    let doc: String = row.get(9)?;
+                    if doc.is_empty() {
+                        None
+                    } else {
+                        Some(doc)
+                    }
+                },
+            })
+        })?;
+
+        let mut symbols = Vec::new();
+        for symbol in symbol_iter {
+            symbols.push(symbol?);
+        }
+        Ok(symbols)
+    }
+
     pub fn clear_file_symbols(&self, file_uri: &str) -> SqlResult<()> {
         let connection = self.connection.lock().unwrap();
         connection.execute("DELETE FROM symbols WHERE file_uri = ?1", [file_uri])?;
@@ -509,7 +581,8 @@ impl SymbolExtractor {
 
             // Create symbol if we have both name and range
             if let (Some(name), Some(range)) = (type_name, type_range) {
-                let documentation = self.find_documentation_for_symbol(range.start.line, doc_comments);
+                let documentation =
+                    self.find_documentation_for_symbol(range.start.line, doc_comments);
 
                 types.push(Symbol {
                     name,
@@ -988,9 +1061,9 @@ main = Browser.sandbox { init = init, update = update, view = view }
     #[test]
     fn test_sum_type_extraction_with_signature() {
         use crate::Document;
-        
+
         let extractor = SymbolExtractor::new().unwrap();
-        
+
         let source = r#"
 module TestMsg exposing (Msg)
 
@@ -1004,26 +1077,29 @@ type Msg = ActiveMotion String | KeyDown Int | MoveDown | MoveLeft
             version: 1,
             text: source.to_string(),
         };
-        
+
         let mut document = Document::new(doc_item);
         let mut parser = crate::parser::Parser::new().unwrap();
         document.reparse(&mut parser).unwrap();
-        
+
         let tree = document.get_parse_tree(&mut parser).unwrap().unwrap();
         let symbols = extractor.extract_symbols(tree, source, &uri).unwrap();
-        
+
         // Find the Msg type
-        let msg_type = symbols.iter().find(|s| s.name == "Msg" && s.kind == SymbolKind::CLASS).unwrap();
-        
+        let msg_type = symbols
+            .iter()
+            .find(|s| s.name == "Msg" && s.kind == SymbolKind::CLASS)
+            .unwrap();
+
         // Check that the type signature is stored correctly (without "type " prefix)
         assert!(msg_type.type_signature.is_some());
         let signature = msg_type.type_signature.as_ref().unwrap();
-        
+
         println!("Msg type signature: '{}'", signature);
-        
+
         // Should not start with "type " since we remove it in extract_types
         assert!(!signature.starts_with("type "));
-        
+
         // Should contain the type definition
         assert!(signature.contains("ActiveMotion String"));
         assert!(signature.contains("KeyDown Int"));

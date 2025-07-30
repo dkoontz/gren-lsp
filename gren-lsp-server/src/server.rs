@@ -105,10 +105,10 @@ impl LanguageServer for GrenLanguageServer {
                     }),
                     ..Default::default()
                 }),
-                // TODO: Implement these features
+                // TODO: Implement these features  
                 // references_provider: Some(OneOf::Left(true)),
                 // code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
-                // rename_provider: Some(OneOf::Left(true)),
+                rename_provider: Some(OneOf::Left(true)),
                 ..Default::default()
             },
             ..Default::default()
@@ -225,11 +225,7 @@ impl LanguageServer for GrenLanguageServer {
         // Force refresh diagnostics after save (bypasses cache)
         let diagnostics = match workspace.force_refresh_diagnostics(&uri).await {
             Ok(diags) => {
-                info!(
-                    "Found {} diagnostics after save for: {}",
-                    diags.len(),
-                    uri
-                );
+                info!("Found {} diagnostics after save for: {}", diags.len(), uri);
                 diags
             }
             Err(e) => {
@@ -299,6 +295,11 @@ impl LanguageServer for GrenLanguageServer {
     ) -> Result<Option<Vec<SymbolInformation>>> {
         let handlers = Handlers::new(self.workspace.clone());
         handlers.workspace_symbols(params).await
+    }
+
+    async fn rename(&self, params: RenameParams) -> Result<Option<WorkspaceEdit>> {
+        let handlers = Handlers::new(self.workspace.clone());
+        handlers.rename(params).await
     }
 
     async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
@@ -651,24 +652,24 @@ impl GrenLanguageServer {
     /// Schedule debounced diagnostics update for real-time feedback
     async fn schedule_debounced_diagnostics(&self, uri: Url) {
         const DEBOUNCE_DURATION: Duration = Duration::from_millis(150); // 150ms debounce for faster feedback
-        
+
         // Record when this document was last changed
         {
             let mut pending = self.pending_diagnostics.write().await;
             pending.insert(uri.clone(), Instant::now());
         }
-        
+
         // Clone necessary data for the async task
         let uri_clone = uri.clone();
         let client = self.client.clone();
         let workspace = self.workspace.clone();
         let pending_diagnostics = self.pending_diagnostics.clone();
-        
+
         // Spawn a task to handle the debounced update
         tokio::spawn(async move {
             // Wait for the debounce period
             sleep(DEBOUNCE_DURATION).await;
-            
+
             // Check if this is still the latest change for this document
             let should_process = {
                 let pending = pending_diagnostics.read().await;
@@ -679,16 +680,16 @@ impl GrenLanguageServer {
                     false // Document was removed from pending updates
                 }
             };
-            
+
             if should_process {
                 info!("⏰ Processing debounced diagnostics for: {}", uri_clone);
-                
+
                 // Remove from pending updates
                 {
                     let mut pending = pending_diagnostics.write().await;
                     pending.remove(&uri_clone);
                 }
-                
+
                 // Get comprehensive diagnostics (syntax + compiler)
                 let diagnostics = {
                     let mut workspace = workspace.write().await;
@@ -702,7 +703,10 @@ impl GrenLanguageServer {
                             diags
                         }
                         Err(e) => {
-                            warn!("Failed to get real-time diagnostics for {}: {}", uri_clone, e);
+                            warn!(
+                                "Failed to get real-time diagnostics for {}: {}",
+                                uri_clone, e
+                            );
                             // Fallback to syntax-only diagnostics
                             let syntax_diagnostics = workspace.get_diagnostics(&uri_clone);
                             info!(
@@ -714,9 +718,11 @@ impl GrenLanguageServer {
                         }
                     }
                 };
-                
+
                 // Publish diagnostics
-                client.publish_diagnostics(uri_clone, diagnostics, None).await;
+                client
+                    .publish_diagnostics(uri_clone, diagnostics, None)
+                    .await;
             } else {
                 info!("⚡ Skipping outdated diagnostic update for: {}", uri_clone);
             }

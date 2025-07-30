@@ -32,8 +32,14 @@ fn compiler_diagnostic_to_lsp(diag: &CompilerDiagnostic, uri: &Url) -> Option<Di
 
     // Try to extract range from message or use default range
     let range = extract_range_from_diagnostic(diag).unwrap_or_else(|| Range {
-        start: Position { line: 0, character: 0 },
-        end: Position { line: 0, character: 1 },
+        start: Position {
+            line: 0,
+            character: 0,
+        },
+        end: Position {
+            line: 0,
+            character: 1,
+        },
     });
 
     Some(Diagnostic {
@@ -75,7 +81,7 @@ fn extract_range_from_diagnostic(diag: &CompilerDiagnostic) -> Option<Range> {
 /// Parse location information from error message text
 fn parse_location_from_message(message: &str) -> Option<Range> {
     // Look for patterns like "line 5, column 10" or "5:10"
-    
+
     // Pattern: "line X, column Y"
     if let Some(captures) = regex::Regex::new(r"line (\d+),?\s*column (\d+)")
         .ok()?
@@ -99,10 +105,7 @@ fn parse_location_from_message(message: &str) -> Option<Range> {
     }
 
     // Pattern: "X:Y" (line:column)
-    if let Some(captures) = regex::Regex::new(r"(\d+):(\d+)")
-        .ok()?
-        .captures(message)
-    {
+    if let Some(captures) = regex::Regex::new(r"(\d+):(\d+)").ok()?.captures(message) {
         if let (Ok(line), Ok(col)) = (
             captures.get(1)?.as_str().parse::<u32>(),
             captures.get(2)?.as_str().parse::<u32>(),
@@ -140,10 +143,10 @@ pub fn merge_diagnostics(
     syntax_diagnostics: Vec<Diagnostic>,
 ) -> Vec<Diagnostic> {
     let mut all_diagnostics = Vec::new();
-    
+
     // Add syntax diagnostics first (they have priority)
     all_diagnostics.extend(syntax_diagnostics);
-    
+
     // Add compiler diagnostics that don't overlap with syntax errors
     for compiler_diag in compiler_diagnostics {
         // Check if there's already a syntax diagnostic at this location
@@ -156,7 +159,7 @@ pub fn merge_diagnostics(
             all_diagnostics.push(compiler_diag);
         }
     }
-    
+
     all_diagnostics
 }
 
@@ -167,7 +170,7 @@ fn ranges_overlap(a: &Range, b: &Range) -> bool {
     let a_end = (a.end.line, a.end.character);
     let b_start = (b.start.line, b.start.character);
     let b_end = (b.end.line, b.end.character);
-    
+
     // Check if ranges overlap
     a_start <= b_end && b_start <= a_end
 }
@@ -222,7 +225,7 @@ mod tests {
     fn test_location_parsing() {
         let message = "Something went wrong on line 10, column 5";
         let range = parse_location_from_message(message).unwrap();
-        
+
         assert_eq!(range.start.line, 9); // 0-based
         assert_eq!(range.start.character, 4); // 0-based
     }
@@ -230,16 +233,34 @@ mod tests {
     #[test]
     fn test_range_overlap() {
         let range1 = Range {
-            start: Position { line: 5, character: 10 },
-            end: Position { line: 5, character: 15 },
+            start: Position {
+                line: 5,
+                character: 10,
+            },
+            end: Position {
+                line: 5,
+                character: 15,
+            },
         };
         let range2 = Range {
-            start: Position { line: 5, character: 12 },
-            end: Position { line: 5, character: 20 },
+            start: Position {
+                line: 5,
+                character: 12,
+            },
+            end: Position {
+                line: 5,
+                character: 20,
+            },
         };
         let range3 = Range {
-            start: Position { line: 10, character: 0 },
-            end: Position { line: 10, character: 5 },
+            start: Position {
+                line: 10,
+                character: 0,
+            },
+            end: Position {
+                line: 10,
+                character: 5,
+            },
         };
 
         assert!(ranges_overlap(&range1, &range2));

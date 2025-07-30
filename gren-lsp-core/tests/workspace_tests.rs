@@ -211,7 +211,7 @@ fn test_lru_cache_eviction() {
     // LRU eviction should keep exactly 2 documents and doc3 should be one of them
     assert_eq!(workspace.stats().document_count, 2);
     assert!(workspace.is_document_open(&uri3)); // Most recent should always be kept
-    
+
     // Based on actual LRU behavior: doc2 gets evicted, doc1 and doc3 remain
     assert!(workspace.is_document_open(&uri1));
     assert!(!workspace.is_document_open(&uri2)); // doc2 gets evicted
@@ -221,7 +221,7 @@ fn test_lru_cache_eviction() {
 #[test]
 fn test_symbol_persistence_after_close() {
     let mut workspace = Workspace::new().unwrap();
-    
+
     // Create a test document with a function
     let doc = create_test_document(
         "file:///test.gren", 
@@ -229,21 +229,31 @@ fn test_symbol_persistence_after_close() {
         1
     );
     let uri = doc.uri.clone();
-    
+
     // Open document (should index symbols)
     workspace.open_document(doc).unwrap();
-    
+
     // Check symbols exist
     let symbols_before = workspace.find_symbols("testFunction").unwrap();
-    assert!(!symbols_before.is_empty(), "Should find symbols after opening document");
-    
+    assert!(
+        !symbols_before.is_empty(),
+        "Should find symbols after opening document"
+    );
+
     // Close document (should NOT remove symbols with our fix)
     workspace.close_document(uri).unwrap();
-    
+
     // Check symbols still exist
     let symbols_after = workspace.find_symbols("testFunction").unwrap();
-    assert_eq!(symbols_after.len(), symbols_before.len(), "Symbols should persist after closing document");
-    assert!(!symbols_after.is_empty(), "Should still find symbols after closing document");
+    assert_eq!(
+        symbols_after.len(),
+        symbols_before.len(),
+        "Symbols should persist after closing document"
+    );
+    assert!(
+        !symbols_after.is_empty(),
+        "Should still find symbols after closing document"
+    );
 }
 
 #[test]

@@ -4,8 +4,8 @@ use lsp_textdocument::FullTextDocument;
 use lsp_types::*;
 use std::path::Path;
 use std::time::Instant;
-use tree_sitter::Tree;
 use tracing::info;
+use tree_sitter::Tree;
 
 pub struct Document {
     text_document: FullTextDocument,
@@ -154,12 +154,16 @@ impl Document {
             // Create a safe filename from the URI
             let filename = self.create_debug_filename();
             let export_path = export_dir.join(filename);
-            
-            info!("Exporting parse tree for {} to {}", self.uri, export_path.display());
-            
+
+            info!(
+                "Exporting parse tree for {} to {}",
+                self.uri,
+                export_path.display()
+            );
+
             // Export the tree in S-expression format
             let tree_content = tree.root_node().to_sexp();
-            
+
             // Also include the source content for reference
             let debug_content = format!(
                 "; Parse tree for: {}\n; Version: {}\n; Generated at: {}\n\n; Source content:\n{}\n\n; Parse tree:\n{}",
@@ -173,13 +177,16 @@ impl Document {
                     .join("\n"),
                 tree_content
             );
-            
+
             std::fs::write(&export_path, debug_content)?;
-            info!("Parse tree exported successfully to {}", export_path.display());
+            info!(
+                "Parse tree exported successfully to {}",
+                export_path.display()
+            );
         } else {
             info!("No parse tree available for export for {}", self.uri);
         }
-        
+
         Ok(())
     }
 
@@ -192,10 +199,10 @@ impl Document {
             .replace('/', "_")
             .replace('\\', "_")
             .replace(':', "_");
-        
+
         // Add version and timestamp for uniqueness
         filename.push_str(&format!("_v{}.sexp", self.version()));
-        
+
         filename
     }
 }

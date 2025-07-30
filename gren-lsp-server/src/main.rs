@@ -14,7 +14,10 @@ mod test_utils;
 #[command(author, version, about, long_about = None)]
 struct Args {
     /// Enable debug mode to export tree-sitter parse trees
-    #[arg(long, help = "Export tree-sitter parse trees to specified directory for debugging")]
+    #[arg(
+        long,
+        help = "Export tree-sitter parse trees to specified directory for debugging"
+    )]
     debug_export_trees: Option<PathBuf>,
 }
 
@@ -32,9 +35,10 @@ async fn main() -> Result<()> {
     let stderr_writer = std::io::stderr;
     let file_appender = tracing_appender::rolling::never(&log_dir, "server.log");
     let (file_non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
-    
+
     // Combine both writers
-    let multi_writer = tracing_subscriber::fmt::writer::MakeWriterExt::and(stderr_writer, file_non_blocking);
+    let multi_writer =
+        tracing_subscriber::fmt::writer::MakeWriterExt::and(stderr_writer, file_non_blocking);
 
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -55,7 +59,10 @@ async fn main() -> Result<()> {
 
     // Log debug settings
     if let Some(ref debug_dir) = args.debug_export_trees {
-        info!("Parse tree debug export enabled, directory: {}", debug_dir.display());
+        info!(
+            "Parse tree debug export enabled, directory: {}",
+            debug_dir.display()
+        );
     }
 
     // Create the language server

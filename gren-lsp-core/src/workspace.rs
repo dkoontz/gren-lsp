@@ -1,6 +1,6 @@
 use crate::{
-    compiler_diagnostics_to_lsp, parse_errors_to_diagnostics, Document,
-    GrenCompiler, Parser, SymbolExtractor, SymbolIndex,
+    compiler_diagnostics_to_lsp, parse_errors_to_diagnostics, Document, GrenCompiler, Parser,
+    SymbolExtractor, SymbolIndex,
 };
 use anyhow::Result;
 use lru::LruCache;
@@ -50,7 +50,7 @@ impl Workspace {
     pub fn set_root(&mut self, root_uri: Url) {
         info!("Setting workspace root: {}", root_uri);
         self.root_uri = Some(root_uri.clone());
-        
+
         // Try to initialize the compiler when root is set
         if let Ok(path) = uri_to_path(&root_uri) {
             match GrenCompiler::new(path) {
@@ -331,12 +331,23 @@ impl Workspace {
         Ok(())
     }
 
-    /// Search for symbols by name
+    /// Search for symbols by name (fuzzy matching for workspace symbol search)
     pub fn find_symbols(&self, name: &str) -> Result<Vec<crate::Symbol>> {
         match self.symbol_index.find_symbol(name) {
             Ok(symbols) => Ok(symbols),
             Err(e) => {
                 warn!("Failed to search symbols for '{}': {}", name, e);
+                Ok(Vec::new())
+            }
+        }
+    }
+
+    /// Search for symbols by exact name match (for rename operations)
+    pub fn find_exact_symbols(&self, name: &str) -> Result<Vec<crate::Symbol>> {
+        match self.symbol_index.find_exact_symbol(name) {
+            Ok(symbols) => Ok(symbols),
+            Err(e) => {
+                warn!("Failed to search exact symbols for '{}': {}", name, e);
                 Ok(Vec::new())
             }
         }
@@ -380,15 +391,18 @@ impl Workspace {
 
     /// Export parse trees for all open documents to the specified directory
     pub fn export_all_parse_trees(&self, export_dir: &Path) -> Result<()> {
-        info!("Exporting parse trees for {} documents to {}", 
-              self.documents.len(), export_dir.display());
-        
+        info!(
+            "Exporting parse trees for {} documents to {}",
+            self.documents.len(),
+            export_dir.display()
+        );
+
         // Create the export directory if it doesn't exist
         std::fs::create_dir_all(export_dir)?;
-        
+
         let mut exported_count = 0;
         let mut error_count = 0;
-        
+
         for (uri, document) in &self.documents {
             match document.export_parse_tree(export_dir) {
                 Ok(()) => {
@@ -400,10 +414,12 @@ impl Workspace {
                 }
             }
         }
-        
-        info!("Parse tree export completed: {} exported, {} errors", 
-              exported_count, error_count);
-        
+
+        info!(
+            "Parse tree export completed: {} exported, {} errors",
+            exported_count, error_count
+        );
+
         Ok(())
     }
 
@@ -412,25 +428,31 @@ impl Workspace {
         if let Some(document) = self.documents.get(uri) {
             // Create the export directory if it doesn't exist
             std::fs::create_dir_all(export_dir)?;
-            
+
             document.export_parse_tree(export_dir)?;
             info!("Parse tree exported for document: {}", uri);
         } else {
             warn!("Document not found for parse tree export: {}", uri);
         }
-        
+
         Ok(())
     }
 
     /// Compile a document using the Gren compiler
     /// Prefers in-memory content for real-time diagnostics, falls back to disk file
-    pub async fn compile_document(&mut self, uri: &Url) -> Result<crate::compiler::CompilationResult> {
+    pub async fn compile_document(
+        &mut self,
+        uri: &Url,
+    ) -> Result<crate::compiler::CompilationResult> {
         if let Some(ref mut compiler) = self.compiler {
             if let Ok(path) = uri_to_path(uri) {
                 // Prefer in-memory content if document is open in the workspace
                 // This provides real-time diagnostics for unsaved changes
                 if let Some(document) = self.documents.get(uri) {
-                    info!("💭 Compiling in-memory content for real-time diagnostics: {}", path.display());
+                    info!(
+                        "💭 Compiling in-memory content for real-time diagnostics: {}",
+                        path.display()
+                    );
                     return compiler.compile_content(document.text(), &path).await;
                 } else if path.exists() {
                     // Fall back to disk file if not in workspace
@@ -448,21 +470,23 @@ impl Workspace {
                 }
             }
         }
-        
+
         anyhow::bail!("Compiler not available or invalid URI")
     }
 
     /// Get compiler diagnostics for all open documents
-    pub async fn get_compiler_diagnostics(&mut self) -> HashMap<Url, Vec<crate::compiler::CompilerDiagnostic>> {
+    pub async fn get_compiler_diagnostics(
+        &mut self,
+    ) -> HashMap<Url, Vec<crate::compiler::CompilerDiagnostic>> {
         let mut diagnostics = HashMap::new();
-        
+
         if self.compiler.is_none() {
             return diagnostics;
         }
 
         // Collect URIs to avoid borrowing issues
         let uris: Vec<Url> = self.documents.keys().cloned().collect();
-        
+
         for uri in uris {
             if let Ok(result) = self.compile_document(&uri).await {
                 if !result.diagnostics.is_empty() {
@@ -470,7 +494,7 @@ impl Workspace {
                 }
             }
         }
-        
+
         diagnostics
     }
 
@@ -490,14 +514,14 @@ impl Workspace {
     /// Force refresh diagnostics for a specific document
     pub async fn force_refresh_diagnostics(&mut self, uri: &Url) -> Result<Vec<Diagnostic>> {
         info!("🔄 Force refreshing diagnostics for {}", uri);
-        
+
         // Invalidate compiler cache for this file
         if let Some(ref mut compiler) = self.compiler {
             if let Ok(path) = uri_to_path(uri) {
                 compiler.invalidate_cache(&path);
             }
         }
-        
+
         // Get fresh diagnostics
         self.get_document_diagnostics(uri).await
     }
@@ -521,7 +545,8 @@ impl Workspace {
         if self.has_compiler() {
             match self.compile_document(uri).await {
                 Ok(result) => {
-                    let compiler_diagnostics = compiler_diagnostics_to_lsp(&result.diagnostics, uri);
+                    let compiler_diagnostics =
+                        compiler_diagnostics_to_lsp(&result.diagnostics, uri);
                     return Ok(compiler_diagnostics);
                 }
                 Err(e) => {
@@ -539,10 +564,10 @@ impl Workspace {
     /// Get comprehensive diagnostics for all open documents
     pub async fn get_all_document_diagnostics(&mut self) -> HashMap<Url, Vec<Diagnostic>> {
         let mut diagnostics = HashMap::new();
-        
+
         // Collect URIs to avoid borrowing issues
         let uris: Vec<Url> = self.documents.keys().cloned().collect();
-        
+
         for uri in uris {
             match self.get_document_diagnostics(&uri).await {
                 Ok(diags) => {
@@ -555,8 +580,13 @@ impl Workspace {
                 }
             }
         }
-        
+
         diagnostics
+    }
+
+    /// Get URIs of all open documents
+    pub fn get_open_document_uris(&self) -> Vec<Url> {
+        self.documents.keys().cloned().collect()
     }
 }
 
