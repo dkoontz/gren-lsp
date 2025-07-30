@@ -20,12 +20,12 @@
 **Description:** Report type errors and warnings from the Gren compiler as LSP diagnostics.
 
 **Acceptance Criteria:**
-- [ ] Run type checking on file save
-- [ ] Parse type errors from compiler output
-- [ ] Convert to LSP diagnostic format with proper ranges
-- [ ] Distinguish between errors and warnings
-- [ ] Provide helpful error messages with hints
-- [ ] Support real-time type checking (debounced)
+- [x] Run type checking on file save
+- [x] Parse type errors from compiler output
+- [x] Convert to LSP diagnostic format with proper ranges
+- [x] Distinguish between errors and warnings
+- [x] Provide helpful error messages with hints
+- [x] Support real-time type checking (debounced)
 
 **Technical Notes:**
 - Merge with syntax diagnostics appropriately

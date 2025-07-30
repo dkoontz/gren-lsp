@@ -1,4 +1,7 @@
-use crate::{parse_errors_to_diagnostics, Document, GrenCompiler, Parser, SymbolExtractor, SymbolIndex};
+use crate::{
+    compiler_diagnostics_to_lsp, merge_diagnostics, parse_errors_to_diagnostics, Document,
+    GrenCompiler, Parser, SymbolExtractor, SymbolIndex,
+};
 use anyhow::Result;
 use lru::LruCache;
 use lsp_types::*;
@@ -207,7 +210,7 @@ impl Workspace {
         Ok(())
     }
 
-    /// Get diagnostics for a document
+    /// Get diagnostics for a document (syntax only - for backward compatibility)
     pub fn get_diagnostics(&mut self, uri: &Url) -> Vec<Diagnostic> {
         // First check if document exists
         if !self.documents.contains_key(uri) {
@@ -409,7 +412,21 @@ impl Workspace {
     pub async fn compile_document(&mut self, uri: &Url) -> Result<crate::compiler::CompilationResult> {
         if let Some(ref mut compiler) = self.compiler {
             if let Ok(path) = uri_to_path(uri) {
-                return compiler.compile_file(&path).await;
+                // Check if file exists on disk
+                if path.exists() {
+                    info!("🔨 Compiling existing file: {}", path.display());
+                    return compiler.compile_file(&path).await;
+                } else {
+                    info!("⚠️  File not found on disk for compilation: {}", path.display());
+                    info!("ℹ️  Compiler diagnostics require saved files");
+                    // Return empty result - file needs to be saved first
+                    return Ok(crate::compiler::CompilationResult {
+                        success: true,
+                        diagnostics: Vec::new(),
+                        timestamp: std::time::SystemTime::now(),
+                        content_hash: 0,
+                    });
+                }
             }
         }
         
@@ -441,6 +458,103 @@ impl Workspace {
     /// Check if compiler is available
     pub fn has_compiler(&self) -> bool {
         self.compiler.as_ref().map_or(false, |c| c.is_available())
+    }
+
+    /// Invalidate compiler cache when project configuration changes
+    pub fn invalidate_compiler_cache(&mut self) {
+        if let Some(ref mut compiler) = self.compiler {
+            compiler.invalidate_all_cache();
+            info!("🔄 Invalidated all compiler cache due to project changes");
+        }
+    }
+
+    /// Force refresh diagnostics for a specific document
+    pub async fn force_refresh_diagnostics(&mut self, uri: &Url) -> Result<Vec<Diagnostic>> {
+        info!("🔄 Force refreshing diagnostics for {}", uri);
+        
+        // Invalidate compiler cache for this file
+        if let Some(ref mut compiler) = self.compiler {
+            if let Ok(path) = uri_to_path(uri) {
+                compiler.invalidate_cache(&path);
+            }
+        }
+        
+        // Get fresh diagnostics
+        self.get_document_diagnostics(uri).await
+    }
+
+    /// Detect if a file is a project configuration file that should trigger cache invalidation
+    pub fn is_project_file(&self, uri: &Url) -> bool {
+        if let Ok(path) = uri_to_path(uri) {
+            if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
+                matches!(filename, "gren.json" | "gren-package.json")
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    }
+
+    /// Get comprehensive diagnostics for a document (syntax + compiler)
+    pub async fn get_document_diagnostics(&mut self, uri: &Url) -> Result<Vec<Diagnostic>> {
+        let mut all_diagnostics = Vec::new();
+
+        // Get syntax diagnostics first
+        if let Some(document) = self.documents.get_mut(uri) {
+            match document.get_parse_tree(&mut self.parser) {
+                Ok(Some(tree)) => {
+                    let errors = Parser::extract_errors(tree);
+                    let syntax_diagnostics = parse_errors_to_diagnostics(errors);
+                    all_diagnostics.extend(syntax_diagnostics);
+                }
+                Ok(None) => {
+                    // No parse tree available, skip syntax diagnostics
+                }
+                Err(e) => {
+                    warn!("Failed to get parse tree for diagnostics: {}", e);
+                }
+            }
+        }
+
+        // Get compiler diagnostics if available
+        if self.has_compiler() {
+            match self.compile_document(uri).await {
+                Ok(result) => {
+                    let compiler_diagnostics = compiler_diagnostics_to_lsp(&result.diagnostics, uri);
+                    all_diagnostics = merge_diagnostics(compiler_diagnostics, all_diagnostics);
+                }
+                Err(e) => {
+                    // Don't fail the whole operation if compilation fails
+                    warn!("Compilation failed for {}: {}", uri, e);
+                }
+            }
+        }
+
+        Ok(all_diagnostics)
+    }
+
+    /// Get comprehensive diagnostics for all open documents
+    pub async fn get_all_document_diagnostics(&mut self) -> HashMap<Url, Vec<Diagnostic>> {
+        let mut diagnostics = HashMap::new();
+        
+        // Collect URIs to avoid borrowing issues
+        let uris: Vec<Url> = self.documents.keys().cloned().collect();
+        
+        for uri in uris {
+            match self.get_document_diagnostics(&uri).await {
+                Ok(diags) => {
+                    if !diags.is_empty() {
+                        diagnostics.insert(uri, diags);
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to get diagnostics for {}: {}", uri, e);
+                }
+            }
+        }
+        
+        diagnostics
     }
 }
 

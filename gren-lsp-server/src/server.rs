@@ -6,7 +6,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::{Client, LanguageServer};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 pub struct GrenLanguageServer {
     client: Client,
@@ -136,13 +136,28 @@ impl LanguageServer for GrenLanguageServer {
             return;
         }
 
-        // Get diagnostics for the newly opened document
-        let diagnostics = workspace.get_diagnostics(&uri);
-        info!(
-            "Found {} diagnostics for document: {}",
-            diagnostics.len(),
-            uri
-        );
+        // Get comprehensive diagnostics for the newly opened document (syntax + compiler)
+        let diagnostics = match workspace.get_document_diagnostics(&uri).await {
+            Ok(diags) => {
+                info!(
+                    "Found {} comprehensive diagnostics for document: {}",
+                    diags.len(),
+                    uri
+                );
+                diags
+            }
+            Err(e) => {
+                warn!("Failed to get comprehensive diagnostics for {}: {}", uri, e);
+                // Fallback to syntax-only diagnostics
+                let syntax_diagnostics = workspace.get_diagnostics(&uri);
+                info!(
+                    "Fallback: {} syntax diagnostics for document: {}",
+                    syntax_diagnostics.len(),
+                    uri
+                );
+                syntax_diagnostics
+            }
+        };
 
         // Export parse tree if debug mode is enabled
         if let Some(ref debug_dir) = self.debug_export_dir {
@@ -174,13 +189,34 @@ impl LanguageServer for GrenLanguageServer {
             return;
         }
 
-        // Get updated diagnostics for the changed document
-        let diagnostics = workspace.get_diagnostics(&uri);
-        info!(
-            "Found {} diagnostics for changed document: {}",
-            diagnostics.len(),
-            uri
-        );
+        // Check if this is a project configuration file that should invalidate cache
+        if workspace.is_project_file(&uri) {
+            info!("🔧 Project configuration file changed: {}", uri);
+            workspace.invalidate_compiler_cache();
+        }
+
+        // Get comprehensive diagnostics for the changed document (syntax + compiler)
+        let diagnostics = match workspace.get_document_diagnostics(&uri).await {
+            Ok(diags) => {
+                info!(
+                    "Found {} comprehensive diagnostics for changed document: {}",
+                    diags.len(),
+                    uri
+                );
+                diags
+            }
+            Err(e) => {
+                warn!("Failed to get comprehensive diagnostics for {}: {}", uri, e);
+                // Fallback to syntax-only diagnostics
+                let syntax_diagnostics = workspace.get_diagnostics(&uri);
+                info!(
+                    "Fallback: {} syntax diagnostics for changed document: {}",
+                    syntax_diagnostics.len(),
+                    uri
+                );
+                syntax_diagnostics
+            }
+        };
 
         // Export parse tree if debug mode is enabled
         if let Some(ref debug_dir) = self.debug_export_dir {
@@ -190,6 +226,35 @@ impl LanguageServer for GrenLanguageServer {
         }
 
         // Publish diagnostics
+        self.client
+            .publish_diagnostics(uri, diagnostics, None)
+            .await;
+    }
+
+    async fn did_save(&self, params: DidSaveTextDocumentParams) {
+        info!("Document saved: {}", params.text_document.uri);
+
+        let uri = params.text_document.uri.clone();
+        let mut workspace = self.workspace.write().await;
+
+        // Force refresh diagnostics after save (bypasses cache)
+        let diagnostics = match workspace.force_refresh_diagnostics(&uri).await {
+            Ok(diags) => {
+                info!(
+                    "Found {} diagnostics after save for: {}",
+                    diags.len(),
+                    uri
+                );
+                diags
+            }
+            Err(e) => {
+                warn!("Failed to get diagnostics after save for {}: {}", uri, e);
+                // Fallback to syntax-only diagnostics
+                workspace.get_diagnostics(&uri)
+            }
+        };
+
+        // Publish fresh diagnostics
         self.client
             .publish_diagnostics(uri, diagnostics, None)
             .await;
