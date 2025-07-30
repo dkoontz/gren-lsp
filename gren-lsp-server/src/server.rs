@@ -313,10 +313,10 @@ impl LanguageServer for GrenLanguageServer {
                     self.index_file(&change.uri).await;
                 }
                 FileChangeType::DELETED => {
-                    // For deleted files, remove them from our index
+                    // For deleted files, remove them completely from our index
                     let mut workspace = self.workspace.write().await;
-                    if let Err(e) = workspace.close_document(change.uri.clone()) {
-                        info!("File was not open, removing from index: {}", e);
+                    if let Err(e) = workspace.remove_file(change.uri.clone()) {
+                        info!("Failed to remove file from index: {}", e);
                     }
                 }
                 _ => {}
@@ -595,11 +595,11 @@ impl GrenLanguageServer {
             docs
         };
 
-        // Close documents from the removed workspace folder
+        // Remove documents from the removed workspace folder
         let mut workspace = self.workspace.write().await;
         for uri in documents_to_remove {
             info!("Removing document from workspace: {}", uri);
-            if let Err(e) = workspace.close_document(uri.clone()) {
+            if let Err(e) = workspace.remove_file(uri.clone()) {
                 error!("Failed to remove document {}: {}", uri, e);
             }
         }

@@ -1000,8 +1000,15 @@ impl Handlers {
                 // Look for import statements with exposing clause
                 if line.starts_with("import ") && line.contains(" exposing ") {
                     if let Some((module_part, exposing_part)) = line.split_once(" exposing ") {
-                        // Extract module name (e.g., "import Maybe" -> "Maybe")
-                        let module_name = module_part.trim_start_matches("import ").trim();
+                        // Extract the actual module name, handling aliases
+                        // e.g., "import Dedris.Motion as Motion" -> "Dedris.Motion"
+                        let module_declaration = module_part.trim_start_matches("import ").trim();
+                        let module_name = if module_declaration.contains(" as ") {
+                            // Split on " as " and take the first part (actual module name)
+                            module_declaration.split(" as ").next().unwrap().trim()
+                        } else {
+                            module_declaration
+                        };
 
                         // Parse the exposing clause
                         let exposing_content = exposing_part.trim();
@@ -1038,19 +1045,27 @@ impl Handlers {
     fn symbol_is_from_module(&self, symbol: &gren_lsp_core::Symbol, module_name: &str) -> bool {
         let file_path = symbol.location.uri.path();
 
-        // Check if the file path ends with ModuleName.gren
-        let pattern = format!("/{}.gren", module_name);
-        let matches = file_path.ends_with(&pattern);
+        // Handle hierarchical module names (e.g., "Dedris.Motion" -> "/Dedris/Motion.gren")
+        let hierarchical_pattern = format!("/{}.gren", module_name.replace(".", "/"));
+        let simple_pattern = format!("/{}.gren", module_name);
+        
+        // Try hierarchical pattern first, then fall back to simple pattern
+        let matches = file_path.ends_with(&hierarchical_pattern) || file_path.ends_with(&simple_pattern);
 
         if matches {
+            let matched_pattern = if file_path.ends_with(&hierarchical_pattern) {
+                &hierarchical_pattern
+            } else {
+                &simple_pattern
+            };
             info!(
-                "✅ Symbol '{}' matches module '{}' (file: {})",
-                symbol.name, module_name, file_path
+                "✅ Symbol '{}' matches module '{}' using pattern '{}' (file: {})",
+                symbol.name, module_name, matched_pattern, file_path
             );
         } else {
             info!(
-                "❌ Symbol '{}' does not match module '{}' (file: {})",
-                symbol.name, module_name, file_path
+                "❌ Symbol '{}' does not match module '{}' - tried patterns '{}' and '{}' (file: {})",
+                symbol.name, module_name, hierarchical_pattern, simple_pattern, file_path
             );
         }
 
@@ -1079,31 +1094,47 @@ impl Handlers {
         };
 
         if supports_markdown {
-            // Markdown format - show kind first, then name
-            if symbol.kind == SymbolKind::CONSTRUCTOR {
-                // Special case for constructors: show parent type
-                if let Some(parent_type) = &symbol.container_name {
-                    content.push(format!(
-                        "*{}* **{}** of type **{}**",
-                        kind_name, symbol.name, parent_type
-                    ));
+            // Check if this is a sum type first
+            let is_sum_type = symbol.type_signature.as_ref()
+                .map(|sig| sig.contains('=') && sig.contains('|'))
+                .unwrap_or(false);
+
+            if is_sum_type {
+                // For sum types, skip the header and use the formatted version directly
+                if let Some(type_signature) = &symbol.type_signature {
+                    let formatted_signature = self.format_sum_type(type_signature);
+                    content.push(formatted_signature);
+                }
+            } else {
+                // For non-sum types, show the normal header
+                if symbol.kind == SymbolKind::CONSTRUCTOR {
+                    // Special case for constructors: show parent type
+                    if let Some(parent_type) = &symbol.container_name {
+                        content.push(format!(
+                            "*{}* **{}** of type **{}**",
+                            kind_name, symbol.name, parent_type
+                        ));
+                    } else {
+                        content.push(format!("*{}* **{}**", kind_name, symbol.name));
+                    }
                 } else {
                     content.push(format!("*{}* **{}**", kind_name, symbol.name));
                 }
-            } else {
-                content.push(format!("*{}* **{}**", kind_name, symbol.name));
+
+                // Add formatted type signature in code block
+                if let Some(type_signature) = &symbol.type_signature {
+                    let formatted_signature = self.format_type_signature(type_signature);
+                    content.push(format!("```gren\n{}\n```", formatted_signature));
+                }
             }
 
-            // Add plain type signature (no clickable links in code block)
-            if let Some(type_signature) = &symbol.type_signature {
-                content.push(format!("```gren\n{}\n```", type_signature));
-            }
-
-            // Add Types section with clickable links
-            if let Some(type_signature) = &symbol.type_signature {
-                let types_section = self.create_types_section(type_signature, workspace).await;
-                if !types_section.is_empty() {
-                    content.push(types_section);
+            // Add Types section with clickable links (only for functions)
+            if symbol.kind == SymbolKind::FUNCTION {
+                if let Some(type_signature) = &symbol.type_signature {
+                    let types_section = self.create_types_section(type_signature, workspace).await;
+                    if !types_section.is_empty() {
+                        content.push(types_section);
+                    }
                 }
             }
 
@@ -1123,19 +1154,6 @@ impl Handlers {
                 }
             }
 
-            // Add file location information
-            let file_name = symbol
-                .location
-                .uri
-                .path()
-                .split('/')
-                .last()
-                .unwrap_or("unknown");
-            let line_number = symbol.location.range.start.line + 1;
-            content.push(format!(
-                "*defined in `{}` at line {}*",
-                file_name, line_number
-            ));
 
             content.join("\n\n")
         } else {
@@ -1325,5 +1343,56 @@ impl Handlers {
                 ..Default::default()
             })
             .collect()
+    }
+
+    /// Format type signatures for better readability, especially sum types
+    fn format_type_signature(&self, signature: &str) -> String {
+        // Check if this looks like a sum type (contains '|' and '=')
+        if signature.contains('=') && signature.contains('|') {
+            self.format_sum_type(signature)
+        } else {
+            // For other types, return as-is
+            signature.to_string()
+        }
+    }
+
+    /// Format sum types with clean constructor listing using markdown
+    fn format_sum_type(&self, signature: &str) -> String {
+        // Find the '=' to split the type name from constructors
+        if let Some(eq_pos) = signature.find('=') {
+            let (type_part, constructors_part) = signature.split_at(eq_pos);
+            let type_part = type_part.trim();
+            let constructors_part = constructors_part[1..].trim(); // Skip the '=' character
+
+            // Extract just the type name (remove leading whitespace and "type " if present)
+            let type_name = if type_part.starts_with("type ") {
+                &type_part[5..]
+            } else {
+                type_part
+            }.trim();
+
+            // Split constructors by '|' and format them
+            let constructors: Vec<&str> = constructors_part.split('|').collect();
+            
+            if constructors.len() > 1 || !constructors[0].trim().is_empty() {
+                let mut formatted = String::new();
+                formatted.push_str(&format!("type {}\n\n**Constructors**", type_name));
+                
+                for constructor in constructors.iter() {
+                    let constructor = constructor.trim();
+                    if !constructor.is_empty() {
+                        formatted.push_str(&format!("\n- {}", constructor));
+                    }
+                }
+                
+                formatted
+            } else {
+                // Single constructor or malformed, return as-is
+                signature.to_string()
+            }
+        } else {
+            // No '=' found, return as-is
+            signature.to_string()
+        }
     }
 }

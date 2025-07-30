@@ -471,33 +471,54 @@ impl SymbolExtractor {
         let matches = cursor.matches(&self.type_query, tree.root_node(), source_bytes);
 
         for m in matches {
+            let mut type_name = None;
+            let mut type_definition = None;
+            let mut type_range = None;
+
+            // Process all captures for this match
             for capture in m.captures {
+                let capture_name = &self.type_query.capture_names()[capture.index as usize];
                 let node = capture.node;
 
-                if let Ok(name) = node.utf8_text(source_bytes) {
-                    let range = Range::new(
-                        Position::new(
-                            node.start_position().row as u32,
-                            node.start_position().column as u32,
-                        ),
-                        Position::new(
-                            node.end_position().row as u32,
-                            node.end_position().column as u32,
-                        ),
-                    );
-
-                    let documentation =
-                        self.find_documentation_for_symbol(range.start.line, doc_comments);
-
-                    types.push(Symbol {
-                        name: name.to_string(),
-                        kind: SymbolKind::CLASS, // Using CLASS for type definitions
-                        location: Location::new(file_uri.clone(), range),
-                        container_name: None,
-                        type_signature: None,
-                        documentation,
-                    });
+                match capture_name.as_str() {
+                    "type.name" => {
+                        if let Ok(name) = node.utf8_text(source_bytes) {
+                            type_name = Some(name.to_string());
+                            type_range = Some(Range::new(
+                                Position::new(
+                                    node.start_position().row as u32,
+                                    node.start_position().column as u32,
+                                ),
+                                Position::new(
+                                    node.end_position().row as u32,
+                                    node.end_position().column as u32,
+                                ),
+                            ));
+                        }
+                    }
+                    "type.definition" | "type.alias" => {
+                        if let Ok(def) = node.utf8_text(source_bytes) {
+                            // Clean up the type definition - remove "type " prefix to avoid duplication
+                            let cleaned_def = def.trim_start_matches("type ").trim();
+                            type_definition = Some(cleaned_def.to_string());
+                        }
+                    }
+                    _ => {} // Ignore other captures
                 }
+            }
+
+            // Create symbol if we have both name and range
+            if let (Some(name), Some(range)) = (type_name, type_range) {
+                let documentation = self.find_documentation_for_symbol(range.start.line, doc_comments);
+
+                types.push(Symbol {
+                    name,
+                    kind: SymbolKind::CLASS, // Using CLASS for type definitions
+                    location: Location::new(file_uri.clone(), range),
+                    container_name: None,
+                    type_signature: type_definition,
+                    documentation,
+                });
             }
         }
 
@@ -962,5 +983,50 @@ main = Browser.sandbox { init = init, update = update, view = view }
             0,
             "Should find no symbols after clearing"
         );
+    }
+
+    #[test]
+    fn test_sum_type_extraction_with_signature() {
+        use crate::Document;
+        
+        let extractor = SymbolExtractor::new().unwrap();
+        
+        let source = r#"
+module TestMsg exposing (Msg)
+
+type Msg = ActiveMotion String | KeyDown Int | MoveDown | MoveLeft
+"#;
+
+        let uri = Url::parse("file:///test.gren").unwrap();
+        let doc_item = TextDocumentItem {
+            uri: uri.clone(),
+            language_id: "gren".to_string(),
+            version: 1,
+            text: source.to_string(),
+        };
+        
+        let mut document = Document::new(doc_item);
+        let mut parser = crate::parser::Parser::new().unwrap();
+        document.reparse(&mut parser).unwrap();
+        
+        let tree = document.get_parse_tree(&mut parser).unwrap().unwrap();
+        let symbols = extractor.extract_symbols(tree, source, &uri).unwrap();
+        
+        // Find the Msg type
+        let msg_type = symbols.iter().find(|s| s.name == "Msg" && s.kind == SymbolKind::CLASS).unwrap();
+        
+        // Check that the type signature is stored correctly (without "type " prefix)
+        assert!(msg_type.type_signature.is_some());
+        let signature = msg_type.type_signature.as_ref().unwrap();
+        
+        println!("Msg type signature: '{}'", signature);
+        
+        // Should not start with "type " since we remove it in extract_types
+        assert!(!signature.starts_with("type "));
+        
+        // Should contain the type definition
+        assert!(signature.contains("ActiveMotion String"));
+        assert!(signature.contains("KeyDown Int"));
+        assert!(signature.contains("MoveDown"));
     }
 }

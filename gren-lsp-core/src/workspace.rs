@@ -84,11 +84,11 @@ impl Workspace {
         // Extract and index symbols
         self.extract_and_update_symbols_for_uri(&uri)?;
 
+        // Update LRU cache BEFORE evicting to ensure proper LRU ordering
+        self.recently_accessed.put(uri, ());
+
         // Evict old documents if cache is at capacity
         self.evict_if_needed();
-
-        // Update LRU cache
-        self.recently_accessed.put(uri, ());
 
         Ok(())
     }
@@ -134,7 +134,21 @@ impl Workspace {
     pub fn close_document(&mut self, uri: Url) -> Result<()> {
         info!("Closing document: {}", uri);
 
-        // Remove symbols from index
+        // Do NOT remove symbols from index when closing documents
+        // Symbols should persist to support cross-file references
+        // Only remove the document from memory cache
+        self.documents.remove(&uri);
+        self.recently_accessed.pop(&uri);
+
+        Ok(())
+    }
+
+    /// Remove a file entirely (e.g., when deleted from filesystem)
+    /// This removes both the document and its symbols
+    pub fn remove_file(&mut self, uri: Url) -> Result<()> {
+        info!("Removing file completely: {}", uri);
+
+        // Remove symbols from index for deleted files
         if let Err(e) = self.symbol_index.clear_file_symbols(uri.as_str()) {
             warn!("Failed to clear symbols for {}: {}", uri, e);
         }
@@ -161,7 +175,7 @@ impl Workspace {
 
     /// Evict least recently used documents if we're at capacity
     fn evict_if_needed(&mut self) {
-        while self.documents.len() >= self.recently_accessed.cap().get() {
+        while self.documents.len() > self.recently_accessed.cap().get() {
             if let Some((uri_to_evict, _)) = self.recently_accessed.pop_lru() {
                 info!("Evicting document from cache: {}", uri_to_evict);
                 self.documents.remove(&uri_to_evict);
