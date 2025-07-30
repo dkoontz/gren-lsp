@@ -1,10 +1,10 @@
-use crate::{parse_errors_to_diagnostics, Document, Parser, SymbolExtractor, SymbolIndex};
+use crate::{parse_errors_to_diagnostics, Document, GrenCompiler, Parser, SymbolExtractor, SymbolIndex};
 use anyhow::Result;
 use lru::LruCache;
 use lsp_types::*;
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
 const DEFAULT_CACHE_SIZE: usize = 100;
@@ -16,6 +16,7 @@ pub struct Workspace {
     parser: Parser,
     symbol_index: SymbolIndex,
     symbol_extractor: SymbolExtractor,
+    compiler: Option<GrenCompiler>,
 }
 
 impl Workspace {
@@ -27,6 +28,7 @@ impl Workspace {
             parser: Parser::new()?,
             symbol_index: SymbolIndex::new()?,
             symbol_extractor: SymbolExtractor::new()?,
+            compiler: None,
         })
     }
 
@@ -38,12 +40,30 @@ impl Workspace {
             parser: Parser::new()?,
             symbol_index: SymbolIndex::new()?,
             symbol_extractor: SymbolExtractor::new()?,
+            compiler: None,
         })
     }
 
     pub fn set_root(&mut self, root_uri: Url) {
         info!("Setting workspace root: {}", root_uri);
-        self.root_uri = Some(root_uri);
+        self.root_uri = Some(root_uri.clone());
+        
+        // Try to initialize the compiler when root is set
+        if let Ok(path) = uri_to_path(&root_uri) {
+            match GrenCompiler::new(path) {
+                Ok(compiler) => {
+                    if compiler.is_available() {
+                        info!("Gren compiler initialized for workspace");
+                        self.compiler = Some(compiler);
+                    } else {
+                        warn!("Gren compiler not available");
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to initialize Gren compiler: {}", e);
+                }
+            }
+        }
     }
 
     pub fn open_document(&mut self, text_document: TextDocumentItem) -> Result<()> {
@@ -384,6 +404,50 @@ impl Workspace {
         
         Ok(())
     }
+
+    /// Compile a document using the Gren compiler
+    pub async fn compile_document(&mut self, uri: &Url) -> Result<crate::compiler::CompilationResult> {
+        if let Some(ref mut compiler) = self.compiler {
+            if let Ok(path) = uri_to_path(uri) {
+                return compiler.compile_file(&path).await;
+            }
+        }
+        
+        anyhow::bail!("Compiler not available or invalid URI")
+    }
+
+    /// Get compiler diagnostics for all open documents
+    pub async fn get_compiler_diagnostics(&mut self) -> HashMap<Url, Vec<crate::compiler::CompilerDiagnostic>> {
+        let mut diagnostics = HashMap::new();
+        
+        if self.compiler.is_none() {
+            return diagnostics;
+        }
+
+        // Collect URIs to avoid borrowing issues
+        let uris: Vec<Url> = self.documents.keys().cloned().collect();
+        
+        for uri in uris {
+            if let Ok(result) = self.compile_document(&uri).await {
+                if !result.diagnostics.is_empty() {
+                    diagnostics.insert(uri, result.diagnostics);
+                }
+            }
+        }
+        
+        diagnostics
+    }
+
+    /// Check if compiler is available
+    pub fn has_compiler(&self) -> bool {
+        self.compiler.as_ref().map_or(false, |c| c.is_available())
+    }
+}
+
+/// Helper function to convert LSP URI to filesystem path
+fn uri_to_path(uri: &Url) -> Result<PathBuf> {
+    uri.to_file_path()
+        .map_err(|_| anyhow::anyhow!("Failed to convert URI to path: {}", uri))
 }
 
 #[derive(Debug, Clone)]

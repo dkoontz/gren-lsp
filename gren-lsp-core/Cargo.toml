@@ -37,3 +37,4 @@ lru = "0.12.4"
 mockall.workspace = true
 proptest.workspace = true
 criterion.workspace = true
+tempfile.workspace = true
