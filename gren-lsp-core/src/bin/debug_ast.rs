@@ -1,8 +1,18 @@
 // Debug tool to examine tree-sitter AST structure
 use gren_lsp_core::Parser;
+use std::env;
+use std::fs;
 
 fn main() -> anyhow::Result<()> {
-    let gren_source = r#"
+    let args: Vec<String> = env::args().collect();
+    
+    let gren_source = if args.len() > 1 {
+        // Read from file argument
+        let filename = &args[1];
+        fs::read_to_string(filename)?
+    } else {
+        // Default example
+        r#"
 module Main exposing (..)
 
 length : String -> Int
@@ -10,10 +20,11 @@ length str = String.length str
 
 add : Int -> Int -> Int
 add x y = x + y
-"#;
+"#.to_string()
+    };
 
     let mut parser = Parser::new()?;
-    let tree = parser.parse(gren_source)?.unwrap();
+    let tree = parser.parse(&gren_source)?.unwrap();
 
     println!("=== Tree-sitter AST Structure ===");
     print_tree(&tree.root_node(), gren_source.as_bytes(), 0);

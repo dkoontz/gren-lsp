@@ -95,6 +95,12 @@ graph TB
 
 - **Pipeline Architecture:** Structuring analysis as composable stages (parse → analyze → index → cache) - *Rationale:* Allows for parallel processing and easier debugging of analysis issues
 
+## Tree-sitter AST Structure
+
+⚠️ **CRITICAL ARCHITECTURAL REQUIREMENT**: All symbol context determination MUST use tree-sitter AST analysis. For complete guidance on tree-sitter usage, AST structure, and mandatory policies, see [Tree-sitter AST Structure](./architecture/tree-sitter-ast-structure.md).
+
+**Core Policy**: Text-based parsing (regex, string matching, manual parsing) is PROHIBITED for symbol context determination. The tree-sitter AST contains all necessary information about symbol locations, contexts, and relationships.
+
 ## Tech Stack
 
 This section represents the definitive technology selection for the Gren LSP project. Each choice has been evaluated against the project requirements for performance, maintainability, and integration capabilities.
