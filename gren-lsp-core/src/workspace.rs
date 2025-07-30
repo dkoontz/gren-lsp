@@ -1,5 +1,5 @@
 use crate::{
-    compiler_diagnostics_to_lsp, merge_diagnostics, parse_errors_to_diagnostics, Document,
+    compiler_diagnostics_to_lsp, parse_errors_to_diagnostics, Document,
     GrenCompiler, Parser, SymbolExtractor, SymbolIndex,
 };
 use anyhow::Result;
@@ -501,33 +501,14 @@ impl Workspace {
         }
     }
 
-    /// Get comprehensive diagnostics for a document (syntax + compiler)
+    /// Get compiler diagnostics for a document
     pub async fn get_document_diagnostics(&mut self, uri: &Url) -> Result<Vec<Diagnostic>> {
-        let mut all_diagnostics = Vec::new();
-
-        // Get syntax diagnostics first
-        if let Some(document) = self.documents.get_mut(uri) {
-            match document.get_parse_tree(&mut self.parser) {
-                Ok(Some(tree)) => {
-                    let errors = Parser::extract_errors(tree);
-                    let syntax_diagnostics = parse_errors_to_diagnostics(errors);
-                    all_diagnostics.extend(syntax_diagnostics);
-                }
-                Ok(None) => {
-                    // No parse tree available, skip syntax diagnostics
-                }
-                Err(e) => {
-                    warn!("Failed to get parse tree for diagnostics: {}", e);
-                }
-            }
-        }
-
-        // Get compiler diagnostics if available
+        // Use only compiler diagnostics - they provide comprehensive and accurate error messages
         if self.has_compiler() {
             match self.compile_document(uri).await {
                 Ok(result) => {
                     let compiler_diagnostics = compiler_diagnostics_to_lsp(&result.diagnostics, uri);
-                    all_diagnostics = merge_diagnostics(compiler_diagnostics, all_diagnostics);
+                    return Ok(compiler_diagnostics);
                 }
                 Err(e) => {
                     // Don't fail the whole operation if compilation fails
@@ -536,7 +517,9 @@ impl Workspace {
             }
         }
 
-        Ok(all_diagnostics)
+        // If no compiler is available, return empty diagnostics
+        // Tree-sitter is used only for symbol navigation, not error reporting
+        Ok(Vec::new())
     }
 
     /// Get comprehensive diagnostics for all open documents

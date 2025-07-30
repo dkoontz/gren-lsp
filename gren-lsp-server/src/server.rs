@@ -650,7 +650,7 @@ impl GrenLanguageServer {
 
     /// Schedule debounced diagnostics update for real-time feedback
     async fn schedule_debounced_diagnostics(&self, uri: Url) {
-        const DEBOUNCE_DURATION: Duration = Duration::from_millis(500); // 500ms debounce
+        const DEBOUNCE_DURATION: Duration = Duration::from_millis(150); // 150ms debounce for faster feedback
         
         // Record when this document was last changed
         {

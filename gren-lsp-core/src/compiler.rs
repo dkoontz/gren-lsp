@@ -222,6 +222,119 @@ impl GrenCompiler {
         })
     }
 
+    /// Run the Gren compiler on a file from a specific working directory
+    async fn run_compiler_in_directory(&mut self, file_path: &Path, working_dir: &Path) -> Result<CompilationResult> {
+        let project_type = self.detect_project_type().await?;
+        
+        let mut cmd = AsyncCommand::new(&self.gren_path);
+        cmd.arg("make")
+            .arg(file_path)
+            .arg("--report=json")
+            .current_dir(working_dir)  // Use the provided working directory
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        // Only add --output for applications, not packages
+        if project_type == ProjectType::Application {
+            cmd.arg("--output=/dev/null");
+        }
+
+        info!("🔨 Running Gren compiler on {} (project type: {:?})", file_path.display(), project_type);
+        info!("📂 Working directory: {}", working_dir.display());
+        debug!("Command: {:?}", cmd);
+
+        let start_time = std::time::Instant::now();
+        let output = cmd.output().await?;
+        let duration = start_time.elapsed();
+        
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        
+        let success = output.status.success();
+        info!("⏱️  Compilation took {:?}, success: {}", duration, success);
+        
+        if !stdout.is_empty() {
+            debug!("Compiler stdout: {}", stdout);
+        }
+        if !stderr.is_empty() {
+            info!("Compiler stderr: {}", stderr);
+        }
+
+        let diagnostics = self.parse_compiler_output(&stderr)?;
+        info!("📋 Found {} compiler diagnostics", diagnostics.len());
+
+        Ok(CompilationResult {
+            success,
+            diagnostics,
+            timestamp: SystemTime::now(),
+            content_hash: self.calculate_content_hash(file_path)?,
+        })
+    }
+
+    /// Copy all source files from the project to the temporary directory
+    /// This is needed so the compiler can resolve imports when running from .tmp
+    async fn copy_source_files_to_temp(&self, temp_base: &Path) -> Result<()> {
+        use std::collections::HashSet;
+        
+        let src_dir = self.working_dir.join("src");
+        if !src_dir.exists() {
+            return Ok(()); // No src directory to copy
+        }
+        
+        let temp_src_dir = temp_base.join("src");
+        
+        // Create a set to track which files we've already copied to avoid duplicates
+        let mut copied_files = HashSet::new();
+        
+        // Recursively copy all .gren files from src to .tmp/src
+        self.copy_gren_files_recursive(&src_dir, &temp_src_dir, &mut copied_files).await?;
+        
+        info!("📋 Copied {} source files to temp directory", copied_files.len());
+        Ok(())
+    }
+    
+    /// Recursively copy .gren files from source to destination
+    fn copy_gren_files_recursive<'a>(
+        &'a self, 
+        src_dir: &'a Path, 
+        dst_dir: &'a Path, 
+        copied_files: &'a mut std::collections::HashSet<std::path::PathBuf>
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            use tokio::fs;
+            
+            if !src_dir.exists() {
+                return Ok(());
+            }
+            
+            // Create destination directory
+            fs::create_dir_all(dst_dir).await?;
+            
+            let mut entries = fs::read_dir(src_dir).await?;
+            while let Some(entry) = entries.next_entry().await? {
+                let src_path = entry.path();
+                let file_name = src_path.file_name().unwrap();
+                let dst_path = dst_dir.join(file_name);
+                
+                if src_path.is_dir() {
+                    // Recursively copy subdirectories
+                    self.copy_gren_files_recursive(&src_path, &dst_path, copied_files).await?;
+                } else if src_path.extension().map_or(false, |ext| ext == "gren") {
+                    // Copy .gren files, but skip if we've already copied this file
+                    if !copied_files.contains(&src_path) {
+                        if let Err(e) = fs::copy(&src_path, &dst_path).await {
+                            warn!("Failed to copy {} to {}: {}", src_path.display(), dst_path.display(), e);
+                        } else {
+                            copied_files.insert(src_path);
+                        }
+                    }
+                }
+            }
+            
+            Ok(())
+        })
+    }
+
     /// Parse JSON output from Gren compiler
     fn parse_compiler_output(&self, output: &str) -> Result<Vec<CompilerDiagnostic>> {
         let mut diagnostics = Vec::new();
@@ -345,30 +458,34 @@ impl GrenCompiler {
         use tokio::fs;
         use tokio::io::AsyncWriteExt;
         
-        // Create a temporary file in the same directory as the original file
-        // This ensures the compiler can resolve relative imports correctly
-        let temp_dir = if original_path.is_absolute() {
-            // For absolute paths, use the same directory as the original file
-            original_path.parent().unwrap_or(&self.working_dir).to_path_buf()
+        // Debug: Show the lines around where the error occurred to see what the compiler is seeing
+        let lines: Vec<&str> = content.lines().collect();
+        if lines.len() >= 8 {
+            info!("🔍 Content around line 8 (where error occurred):");
+            for (i, line) in lines.iter().enumerate().skip(5).take(5) {
+                info!("  {}: {}", i + 1, line);
+            }
+        }
+        
+        
+        // Create a .tmp directory structure at project root that mirrors the original structure
+        // This preserves module names and allows proper import resolution
+        let relative_path = if original_path.is_absolute() {
+            // Convert absolute path to relative by stripping the working directory
+            original_path.strip_prefix(&self.working_dir)
+                .unwrap_or(original_path)
         } else {
-            // For relative paths, resolve against the working directory
-            self.working_dir.join(original_path.parent().unwrap_or(Path::new(".")))
+            original_path
         };
         
-        let original_filename = original_path.file_name().unwrap_or_else(|| std::ffi::OsStr::new("temp.gren"));
+        // Create temp directory structure in OS temp directory
+        let temp_base = std::env::temp_dir()
+            .join("gren-lsp")
+            .join(format!("compile_{}", std::process::id()));
+        let temp_file_path = temp_base.join(relative_path);
+        let temp_dir = temp_file_path.parent().unwrap_or(&temp_base).to_path_buf();
         
-        // Create a unique temporary filename using timestamp and process ID
-        let temp_filename = format!(".tmp_lsp_{}_{:x}_{}", 
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .subsec_nanos(),
-            original_filename.to_string_lossy()
-        );
-        let temp_path = temp_dir.join(temp_filename);
-        
-        info!("💾 Writing in-memory content to temporary file: {}", temp_path.display());
+        info!("💾 Writing in-memory content to temporary file: {}", temp_file_path.display());
         info!("📁 Temp file directory: {}", temp_dir.display());
         
         // Ensure the temp directory exists
@@ -376,31 +493,69 @@ impl GrenCompiler {
             warn!("Failed to create temp directory {}: {}", temp_dir.display(), e);
         }
         
-        // Write content to temporary file
-        let mut temp_file = fs::File::create(&temp_path).await?;
+        // Copy gren.json to .tmp directory so compiler can find project configuration
+        let gren_json_src = self.working_dir.join("gren.json");
+        let gren_json_dst = temp_base.join("gren.json");
+        if gren_json_src.exists() && !gren_json_dst.exists() {
+            if let Err(e) = fs::copy(&gren_json_src, &gren_json_dst).await {
+                warn!("Failed to copy gren.json to temp directory: {}", e);
+            } else {
+                info!("📋 Copied gren.json to temp directory");
+            }
+        }
+        
+        // Copy all source files to .tmp directory FIRST so imports can be resolved
+        // This is needed because Gren needs access to all modules for compilation
+        if let Err(e) = self.copy_source_files_to_temp(&temp_base).await {
+            warn!("Failed to copy source files to temp directory: {}", e);
+        } else {
+            info!("📂 Copied source files to temp directory for import resolution");
+        }
+        
+        // Write the corrected content to temporary file AFTER copying other files
+        // This ensures our in-memory changes override the disk version
+        let mut temp_file = fs::File::create(&temp_file_path).await?;
         temp_file.write_all(content.as_bytes()).await?;
         temp_file.flush().await?;
         
         // Ensure the file is closed before compilation
         drop(temp_file);
+        info!("✏️  Overwrote temp file with corrected in-memory content");
         
-        // Compile the temporary file
-        let result = self.run_compiler(&temp_path).await;
-        
-        // Clean up the temporary file
-        if let Err(e) = fs::remove_file(&temp_path).await {
-            warn!("Failed to cleanup temporary file {}: {}", temp_path.display(), e);
-        } else {
-            info!("🗑️  Cleaned up temporary file: {}", temp_path.display());
+        // Debug: Read back the temp file to verify what was actually written
+        if let Ok(written_content) = fs::read_to_string(&temp_file_path).await {
+            let written_lines: Vec<&str> = written_content.lines().collect();
+            if written_lines.len() >= 8 {
+                info!("🔍 Final temp file content around line 8:");
+                for (i, line) in written_lines.iter().enumerate().skip(5).take(5) {
+                    info!("  {}: {}", i + 1, line);
+                }
+            }
         }
+        
+        // Compile the temporary file, running from the .tmp directory
+        let mut result = self.run_compiler_in_directory(&temp_file_path, &temp_base).await;
         
         // Adjust the diagnostic paths to point to the original file
         match result {
             Ok(mut compilation_result) => {
                 for diagnostic in &mut compilation_result.diagnostics {
                     if let Some(ref mut path) = diagnostic.path {
-                        if path == &temp_path {
+                        // Check if the diagnostic path matches the temp file path
+                        // Use canonicalized comparison to handle /var vs /private/var differences on macOS
+                        let paths_match = if let (Ok(canonical_diagnostic), Ok(canonical_temp)) = 
+                            (path.canonicalize(), temp_file_path.canonicalize()) {
+                            canonical_diagnostic == canonical_temp
+                        } else {
+                            // Fallback to direct comparison if canonicalization fails
+                            path == &temp_file_path
+                        };
+                        
+                        if paths_match {
+                            info!("📍 Adjusting diagnostic path from {} to {}", path.display(), original_path.display());
                             *path = original_path.to_path_buf();
+                        } else {
+                            info!("⚠️ Diagnostic path {} doesn't match temp file path {}", path.display(), temp_file_path.display());
                         }
                     }
                 }
@@ -411,13 +566,41 @@ impl GrenCompiler {
                 info!("✅ Successfully compiled in-memory content with {} diagnostics", 
                       compilation_result.diagnostics.len());
                 
-                Ok(compilation_result)
+                result = Ok(compilation_result);
             }
             Err(e) => {
                 warn!("❌ Failed to compile temporary file: {}", e);
-                Err(e)
+                result = Err(e);
             }
         }
+        
+        // Clean up the temporary file
+        if let Err(e) = fs::remove_file(&temp_file_path).await {
+            warn!("Failed to cleanup temporary file {}: {}", temp_file_path.display(), e);
+        } else {
+            info!("🗑️  Cleaned up temporary file: {}", temp_file_path.display());
+        }
+        
+        // Clean up the temporary gren.json file if it exists
+        let gren_json_dst = temp_base.join("gren.json");
+        if gren_json_dst.exists() {
+            if let Err(e) = fs::remove_file(&gren_json_dst).await {
+                warn!("Failed to cleanup temporary gren.json: {}", e);
+            } else {
+                info!("🗑️  Cleaned up temporary gren.json");
+            }
+        }
+        
+        // Clean up the entire .tmp directory to remove all copied source files
+        if temp_base.exists() {
+            if let Err(e) = fs::remove_dir_all(&temp_base).await {
+                warn!("Failed to cleanup temporary directory {}: {}", temp_base.display(), e);
+            } else {
+                info!("🗑️  Cleaned up temporary directory: {}", temp_base.display());
+            }
+        }
+        
+        result
     }
 
     /// Calculate content hash from string content (for in-memory compilation)
