@@ -105,7 +105,7 @@ impl LanguageServer for GrenLanguageServer {
                     }),
                     ..Default::default()
                 }),
-                // TODO: Implement these features  
+                // TODO: Implement these features
                 // references_provider: Some(OneOf::Left(true)),
                 // code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
                 rename_provider: Some(OneOf::Left(true)),

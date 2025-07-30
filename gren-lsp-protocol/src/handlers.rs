@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 use gren_lsp_core::{Symbol as GrenSymbol, Workspace};
 use lsp_types::*;
 use std::sync::Arc;
@@ -682,10 +683,7 @@ impl Handlers {
                 new_text: new_name.to_string(),
             };
 
-            changes_by_file
-                .entry(location.uri)
-                .or_insert_with(Vec::new)
-                .push(edit);
+            changes_by_file.entry(location.uri).or_default().push(edit);
         }
 
         // Sort edits within each file by position (reverse order for safe application)
@@ -758,7 +756,6 @@ impl Handlers {
                 children: None,
                 tags: None,
                 #[allow(deprecated)]
-                #[allow(deprecated)]
                 deprecated: Some(false),
             };
             document_symbols.push(doc_symbol);
@@ -815,8 +812,6 @@ impl Handlers {
                     children: None,
                     tags: None,
                     #[allow(deprecated)]
-                    #[allow(deprecated)]
-                    #[allow(deprecated)]
                     deprecated: Some(false),
                 })
                 .collect();
@@ -833,7 +828,6 @@ impl Handlers {
                     Some(type_constructors)
                 },
                 tags: None,
-                #[allow(deprecated)]
                 #[allow(deprecated)]
                 deprecated: Some(false),
             };
@@ -852,7 +846,6 @@ impl Handlers {
                 selection_range: function.location.range,
                 children: None,
                 tags: None,
-                #[allow(deprecated)]
                 #[allow(deprecated)]
                 deprecated: Some(false),
             };
@@ -1650,8 +1643,8 @@ impl Handlers {
             let constructors_part = constructors_part[1..].trim(); // Skip the '=' character
 
             // Extract just the type name (remove leading whitespace and "type " if present)
-            let type_name = if type_part.starts_with("type ") {
-                &type_part[5..]
+            let type_name = if let Some(stripped) = type_part.strip_prefix("type ") {
+                stripped
             } else {
                 type_part
             }
@@ -1864,66 +1857,76 @@ mod tests {
     #[test]
     fn test_word_boundary_detection() {
         let handlers = create_test_handlers();
-        
+
         // Test the specific case that's failing
         let line = "setBlock";
         let symbol_name = "set";
-        
+
         let match_start = line.find(symbol_name).unwrap(); // Should be 0
         let absolute_start = match_start;
         let absolute_end = absolute_start + symbol_name.len(); // Should be 3
-        
+
         // Check if this is a complete word match
         let before_ok = absolute_start == 0
-            || !handlers.is_identifier_char(
-                line.chars().nth(absolute_start - 1).unwrap_or(' '),
-            );
+            || !handlers.is_identifier_char(line.chars().nth(absolute_start - 1).unwrap_or(' '));
         let after_ok = absolute_end >= line.len()
-            || !handlers.is_identifier_char(
-                line.chars().nth(absolute_end).unwrap_or(' '),
-            );
+            || !handlers.is_identifier_char(line.chars().nth(absolute_end).unwrap_or(' '));
         let is_complete_word = before_ok && after_ok;
-        
+
         println!("Testing '{}' in '{}'", symbol_name, line);
-        println!("  absolute_start: {}, absolute_end: {}", absolute_start, absolute_end);
-        println!("  char at absolute_end: {:?}", line.chars().nth(absolute_end));
+        println!(
+            "  absolute_start: {}, absolute_end: {}",
+            absolute_start, absolute_end
+        );
+        println!(
+            "  char at absolute_end: {:?}",
+            line.chars().nth(absolute_end)
+        );
         println!("  before_ok: {}, after_ok: {}", before_ok, after_ok);
         println!("  is_complete_word: {}", is_complete_word);
-        
+
         // This should be false - "set" is not a complete word in "setBlock"
-        assert!(!is_complete_word, "set should not be considered a complete word in setBlock");
-        
+        assert!(
+            !is_complete_word,
+            "set should not be considered a complete word in setBlock"
+        );
+
         // Test a case that should work
         let line2 = "use set here";
         let match_start2 = line2.find(symbol_name).unwrap(); // Should be 4
         let absolute_start2 = match_start2;
         let absolute_end2 = absolute_start2 + symbol_name.len(); // Should be 7
-        
+
         let before_ok2 = absolute_start2 == 0
-            || !handlers.is_identifier_char(
-                line2.chars().nth(absolute_start2 - 1).unwrap_or(' '),
-            );
+            || !handlers.is_identifier_char(line2.chars().nth(absolute_start2 - 1).unwrap_or(' '));
         let after_ok2 = absolute_end2 >= line2.len()
-            || !handlers.is_identifier_char(
-                line2.chars().nth(absolute_end2).unwrap_or(' '),
-            );
+            || !handlers.is_identifier_char(line2.chars().nth(absolute_end2).unwrap_or(' '));
         let is_complete_word2 = before_ok2 && after_ok2;
-        
+
         println!("Testing '{}' in '{}'", symbol_name, line2);
-        println!("  absolute_start: {}, absolute_end: {}", absolute_start2, absolute_end2);
-        println!("  char at absolute_end: {:?}", line2.chars().nth(absolute_end2));
+        println!(
+            "  absolute_start: {}, absolute_end: {}",
+            absolute_start2, absolute_end2
+        );
+        println!(
+            "  char at absolute_end: {:?}",
+            line2.chars().nth(absolute_end2)
+        );
         println!("  before_ok: {}, after_ok: {}", before_ok2, after_ok2);
         println!("  is_complete_word: {}", is_complete_word2);
-        
+
         // This should be true - "set" is a complete word in "use set here"
-        assert!(is_complete_word2, "set should be considered a complete word in 'use set here'");
+        assert!(
+            is_complete_word2,
+            "set should be considered a complete word in 'use set here'"
+        );
     }
 
     #[test]
     fn test_exact_symbol_search() {
-        use gren_lsp_core::{SymbolIndex, Symbol};
+        use gren_lsp_core::{Symbol, SymbolIndex};
         use lsp_types::*;
-        
+
         // Create a symbol index with test symbols
         let index = SymbolIndex::new().expect("Failed to create symbol index");
         let file_uri = Url::parse("file:///test.gren").expect("Invalid URI");
@@ -1940,7 +1943,7 @@ mod tests {
             type_signature: Some("a -> b -> a".to_string()),
             documentation: None,
         };
-        
+
         let set_block_symbol = Symbol {
             name: "setBlock".to_string(),
             kind: SymbolKind::FUNCTION,
@@ -1954,19 +1957,35 @@ mod tests {
         };
 
         // Index both symbols
-        index.index_symbol(&set_symbol).expect("Failed to index set symbol");
-        index.index_symbol(&set_block_symbol).expect("Failed to index setBlock symbol");
+        index
+            .index_symbol(&set_symbol)
+            .expect("Failed to index set symbol");
+        index
+            .index_symbol(&set_block_symbol)
+            .expect("Failed to index setBlock symbol");
 
         // Test fuzzy search - should find both
         let fuzzy_results = index.find_symbol("set").expect("Failed to search symbols");
-        assert_eq!(fuzzy_results.len(), 2, "Fuzzy search should find both 'set' and 'setBlock'");
-        
+        assert_eq!(
+            fuzzy_results.len(),
+            2,
+            "Fuzzy search should find both 'set' and 'setBlock'"
+        );
+
         // Test exact search - should find only "set"
-        let exact_results = index.find_exact_symbol("set").expect("Failed to search exact symbols");
-        assert_eq!(exact_results.len(), 1, "Exact search should find only 'set'");
+        let exact_results = index
+            .find_exact_symbol("set")
+            .expect("Failed to search exact symbols");
+        assert_eq!(
+            exact_results.len(),
+            1,
+            "Exact search should find only 'set'"
+        );
         assert_eq!(exact_results[0].name, "set");
 
         // Clean up
-        index.clear_file_symbols(file_uri.as_str()).expect("Failed to clear symbols");
+        index
+            .clear_file_symbols(file_uri.as_str())
+            .expect("Failed to clear symbols");
     }
 }

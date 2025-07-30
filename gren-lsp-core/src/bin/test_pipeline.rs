@@ -1,5 +1,5 @@
 // Full pipeline test: parsing -> symbol extraction -> database storage
-use gren_lsp_core::{SymbolExtractor, SymbolIndex, Workspace};
+use gren_lsp_core::Workspace;
 use lsp_types::*;
 
 fn main() -> anyhow::Result<()> {

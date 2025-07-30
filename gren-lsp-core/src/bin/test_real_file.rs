@@ -92,7 +92,7 @@ toString (Bytes) = ""
         // Test parsing directly
         println!("\n🧪 Testing direct parsing...");
         let mut parser = gren_lsp_core::Parser::new()?;
-        match parser.parse(&workspace.get_document_readonly(&doc_uri).unwrap().text()) {
+        match parser.parse(workspace.get_document_readonly(&doc_uri).unwrap().text()) {
             Ok(Some(tree)) => {
                 println!("✅ Parsing successful");
                 let errors = gren_lsp_core::Parser::extract_errors(&tree);

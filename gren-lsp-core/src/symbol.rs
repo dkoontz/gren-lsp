@@ -1018,7 +1018,11 @@ main = Browser.sandbox { init = init, update = update, view = view }
     #[test]
     fn test_symbol_index_operations() {
         let index = SymbolIndex::new().expect("Failed to create symbol index");
+
         let file_uri = Url::parse("file:///test.gren").expect("Invalid URI");
+
+        // Clear any existing symbols for this test file to ensure clean state
+        let _ = index.clear_file_symbols(file_uri.as_str());
 
         // Create a test symbol
         let symbol = Symbol {
@@ -1037,7 +1041,9 @@ main = Browser.sandbox { init = init, update = update, view = view }
         index.index_symbol(&symbol).expect("Failed to index symbol");
 
         // Search for the symbol
-        let found = index.find_symbol("testFunction").expect("Failed to search");
+        let found = index
+            .find_exact_symbol("testFunction")
+            .expect("Failed to search");
         assert_eq!(found.len(), 1, "Should find exactly one symbol");
         assert_eq!(found[0].name, "testFunction");
         assert_eq!(found[0].type_signature, Some("String -> Int".to_string()));

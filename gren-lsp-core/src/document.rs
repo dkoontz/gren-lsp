@@ -196,9 +196,7 @@ impl Document {
         let uri_str = self.uri.as_str();
         let mut filename = uri_str
             .replace("file://", "")
-            .replace('/', "_")
-            .replace('\\', "_")
-            .replace(':', "_");
+            .replace(['/', '\\', ':'], "_");
 
         // Add version and timestamp for uniqueness
         filename.push_str(&format!("_v{}.sexp", self.version()));

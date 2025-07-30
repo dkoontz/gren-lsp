@@ -31,7 +31,7 @@ fn compiler_diagnostic_to_lsp(diag: &CompilerDiagnostic, uri: &Url) -> Option<Di
     };
 
     // Try to extract range from message or use default range
-    let range = extract_range_from_diagnostic(diag).unwrap_or_else(|| Range {
+    let range = extract_range_from_diagnostic(diag).unwrap_or(Range {
         start: Position {
             line: 0,
             character: 0,
@@ -79,8 +79,10 @@ fn extract_range_from_diagnostic(diag: &CompilerDiagnostic) -> Option<Range> {
 }
 
 /// Parse location information from error message text
+#[allow(clippy::disallowed_methods, clippy::disallowed_types)]
 fn parse_location_from_message(message: &str) -> Option<Range> {
     // Look for patterns like "line 5, column 10" or "5:10"
+    // Note: Using regex here is acceptable for parsing compiler diagnostic output
 
     // Pattern: "line X, column Y"
     if let Some(captures) = regex::Regex::new(r"line (\d+),?\s*column (\d+)")

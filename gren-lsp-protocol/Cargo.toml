@@ -26,6 +26,8 @@ gren-lsp-core = { path = "../gren-lsp-core" }
 
 [dev-dependencies]
 mockall.workspace = true
+regex.workspace = true
+walkdir.workspace = true
 
 [[bin]]
 name = "test_symbol_handlers"
@@ -38,3 +40,7 @@ path = "src/bin/test_hover_formatting.rs"
 [[bin]]
 name = "test_client_capabilities"
 path = "src/bin/test_client_capabilities.rs"
+
+[[bin]]
+name = "test_rename_final"
+path = "src/bin/test_rename_final.rs"

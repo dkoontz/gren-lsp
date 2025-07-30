@@ -86,6 +86,7 @@ enum GrenCompilerOutput {
 #[derive(Debug, Deserialize)]
 struct GrenError {
     path: String,
+    #[allow(dead_code)]
     name: String,
     problems: Vec<GrenProblem>,
 }
@@ -312,6 +313,7 @@ impl GrenCompiler {
     }
 
     /// Recursively copy .gren files from source to destination
+    #[allow(clippy::only_used_in_recursion)]
     fn copy_gren_files_recursive<'a>(
         &'a self,
         src_dir: &'a Path,
