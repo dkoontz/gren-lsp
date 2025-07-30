@@ -409,17 +409,22 @@ impl Workspace {
     }
 
     /// Compile a document using the Gren compiler
+    /// Prefers in-memory content for real-time diagnostics, falls back to disk file
     pub async fn compile_document(&mut self, uri: &Url) -> Result<crate::compiler::CompilationResult> {
         if let Some(ref mut compiler) = self.compiler {
             if let Ok(path) = uri_to_path(uri) {
-                // Check if file exists on disk
-                if path.exists() {
-                    info!("🔨 Compiling existing file: {}", path.display());
+                // Prefer in-memory content if document is open in the workspace
+                // This provides real-time diagnostics for unsaved changes
+                if let Some(document) = self.documents.get(uri) {
+                    info!("💭 Compiling in-memory content for real-time diagnostics: {}", path.display());
+                    return compiler.compile_content(document.text(), &path).await;
+                } else if path.exists() {
+                    // Fall back to disk file if not in workspace
+                    info!("🔨 Compiling disk file: {}", path.display());
                     return compiler.compile_file(&path).await;
                 } else {
-                    info!("⚠️  File not found on disk for compilation: {}", path.display());
-                    info!("ℹ️  Compiler diagnostics require saved files");
-                    // Return empty result - file needs to be saved first
+                    info!("⚠️  No document or file found for: {}", path.display());
+                    // Return empty result - no content available
                     return Ok(crate::compiler::CompilationResult {
                         success: true,
                         diagnostics: Vec::new(),

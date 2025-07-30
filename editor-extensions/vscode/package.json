@@ -72,7 +72,7 @@
     "watch": "tsc -w",
     "prepackage": "npm run compile",
     "package": "vsce package",
-    "build": "npm run compile"
+    "install-extension": "npm run package && code --install-extension gren-lsp-1.0.0.vsix --force"
   },
   "dependencies": {
     "vscode-languageclient": "^8.1.0"

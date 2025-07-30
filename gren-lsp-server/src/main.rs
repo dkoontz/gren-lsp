@@ -22,19 +22,25 @@ struct Args {
 async fn main() -> Result<()> {
     let args = Args::parse();
 
-    // Initialize logging with file output for debugging
+    // Initialize logging to stderr so VS Code can capture it in the output channel
+    // Also keep file logging for debugging purposes
     let log_dir = std::env::temp_dir().join("gren-lsp");
     std::fs::create_dir_all(&log_dir).ok();
     let log_file = log_dir.join("server.log");
 
+    // Create both stderr and file writers
+    let stderr_writer = std::io::stderr;
     let file_appender = tracing_appender::rolling::never(&log_dir, "server.log");
-    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+    let (file_non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+    
+    // Combine both writers
+    let multi_writer = tracing_subscriber::fmt::writer::MakeWriterExt::and(stderr_writer, file_non_blocking);
 
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("gren_lsp=debug")),
         )
-        .with_writer(non_blocking)
+        .with_writer(multi_writer)
         .with_ansi(false)
         .init();
 

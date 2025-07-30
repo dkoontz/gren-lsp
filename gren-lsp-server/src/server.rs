@@ -1,9 +1,12 @@
 use gren_lsp_core::Workspace;
 use gren_lsp_protocol::handlers::Handlers;
 use lsp_types::*;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
+use tokio::time::sleep;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::{Client, LanguageServer};
 use tracing::{error, info, warn};
@@ -13,6 +16,8 @@ pub struct GrenLanguageServer {
     workspace: Arc<RwLock<Workspace>>,
     client_capabilities: Arc<RwLock<Option<ClientCapabilities>>>,
     debug_export_dir: Option<PathBuf>,
+    // Debouncing mechanism for real-time compilation
+    pending_diagnostics: Arc<RwLock<HashMap<Url, Instant>>>,
 }
 
 impl GrenLanguageServer {
@@ -49,6 +54,7 @@ impl GrenLanguageServer {
             workspace: Arc::new(RwLock::new(workspace)),
             client_capabilities: Arc::new(RwLock::new(None)),
             debug_export_dir,
+            pending_diagnostics: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 }
@@ -195,40 +201,19 @@ impl LanguageServer for GrenLanguageServer {
             workspace.invalidate_compiler_cache();
         }
 
-        // Get comprehensive diagnostics for the changed document (syntax + compiler)
-        let diagnostics = match workspace.get_document_diagnostics(&uri).await {
-            Ok(diags) => {
-                info!(
-                    "Found {} comprehensive diagnostics for changed document: {}",
-                    diags.len(),
-                    uri
-                );
-                diags
-            }
-            Err(e) => {
-                warn!("Failed to get comprehensive diagnostics for {}: {}", uri, e);
-                // Fallback to syntax-only diagnostics
-                let syntax_diagnostics = workspace.get_diagnostics(&uri);
-                info!(
-                    "Fallback: {} syntax diagnostics for changed document: {}",
-                    syntax_diagnostics.len(),
-                    uri
-                );
-                syntax_diagnostics
-            }
-        };
+        // Release the workspace lock before calling debounced diagnostics
+        drop(workspace);
 
         // Export parse tree if debug mode is enabled
         if let Some(ref debug_dir) = self.debug_export_dir {
+            let workspace = self.workspace.read().await;
             if let Err(e) = workspace.export_parse_tree_for_document(&uri, debug_dir) {
                 error!("Failed to export parse tree for {}: {}", uri, e);
             }
         }
 
-        // Publish diagnostics
-        self.client
-            .publish_diagnostics(uri, diagnostics, None)
-            .await;
+        // Schedule debounced diagnostics update
+        self.schedule_debounced_diagnostics(uri).await;
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
@@ -661,5 +646,80 @@ impl GrenLanguageServer {
         } else {
             info!("Progress completed");
         }
+    }
+
+    /// Schedule debounced diagnostics update for real-time feedback
+    async fn schedule_debounced_diagnostics(&self, uri: Url) {
+        const DEBOUNCE_DURATION: Duration = Duration::from_millis(500); // 500ms debounce
+        
+        // Record when this document was last changed
+        {
+            let mut pending = self.pending_diagnostics.write().await;
+            pending.insert(uri.clone(), Instant::now());
+        }
+        
+        // Clone necessary data for the async task
+        let uri_clone = uri.clone();
+        let client = self.client.clone();
+        let workspace = self.workspace.clone();
+        let pending_diagnostics = self.pending_diagnostics.clone();
+        
+        // Spawn a task to handle the debounced update
+        tokio::spawn(async move {
+            // Wait for the debounce period
+            sleep(DEBOUNCE_DURATION).await;
+            
+            // Check if this is still the latest change for this document
+            let should_process = {
+                let pending = pending_diagnostics.read().await;
+                if let Some(last_change) = pending.get(&uri_clone) {
+                    // Only process if enough time has passed since the last change
+                    last_change.elapsed() >= DEBOUNCE_DURATION
+                } else {
+                    false // Document was removed from pending updates
+                }
+            };
+            
+            if should_process {
+                info!("⏰ Processing debounced diagnostics for: {}", uri_clone);
+                
+                // Remove from pending updates
+                {
+                    let mut pending = pending_diagnostics.write().await;
+                    pending.remove(&uri_clone);
+                }
+                
+                // Get comprehensive diagnostics (syntax + compiler)
+                let diagnostics = {
+                    let mut workspace = workspace.write().await;
+                    match workspace.get_document_diagnostics(&uri_clone).await {
+                        Ok(diags) => {
+                            info!(
+                                "Found {} real-time diagnostics for: {}",
+                                diags.len(),
+                                uri_clone
+                            );
+                            diags
+                        }
+                        Err(e) => {
+                            warn!("Failed to get real-time diagnostics for {}: {}", uri_clone, e);
+                            // Fallback to syntax-only diagnostics
+                            let syntax_diagnostics = workspace.get_diagnostics(&uri_clone);
+                            info!(
+                                "Fallback: {} syntax diagnostics for: {}",
+                                syntax_diagnostics.len(),
+                                uri_clone
+                            );
+                            syntax_diagnostics
+                        }
+                    }
+                };
+                
+                // Publish diagnostics
+                client.publish_diagnostics(uri_clone, diagnostics, None).await;
+            } else {
+                info!("⚡ Skipping outdated diagnostic update for: {}", uri_clone);
+            }
+        });
     }
 }

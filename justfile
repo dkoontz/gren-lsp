@@ -129,7 +129,7 @@ loc:
 
 # VS Code specific commands
 vscode-build:
-    cd editor-extensions/vscode && npm run build
+    cd editor-extensions/vscode && npm run compile
 
 vscode-package:
     cd editor-extensions/vscode && npm run package
@@ -139,6 +139,14 @@ vscode-watch:
 
 vscode-clean:
     cd editor-extensions/vscode && rm -rf out/ node_modules/ tsconfig.tsbuildinfo *.vsix
+
+vscode-install:
+    cd editor-extensions/vscode && npm run install-extension
+
+# Build LSP server and install VS Code extension
+vscode-dev: build vscode-install
+    @echo "✅ LSP server built and VS Code extension installed!"
+    @echo "💡 You can now open a Gren project in VS Code to test the extension"
 
 # Aliases for common commands
 alias b := build

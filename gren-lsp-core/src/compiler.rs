@@ -340,6 +340,96 @@ impl GrenCompiler {
         self.compile_file(file_path).await
     }
 
+    /// Compile in-memory content by writing to a temporary file
+    pub async fn compile_content(&mut self, content: &str, original_path: &Path) -> Result<CompilationResult> {
+        use tokio::fs;
+        use tokio::io::AsyncWriteExt;
+        
+        // Create a temporary file in the same directory as the original file
+        // This ensures the compiler can resolve relative imports correctly
+        let temp_dir = if original_path.is_absolute() {
+            // For absolute paths, use the same directory as the original file
+            original_path.parent().unwrap_or(&self.working_dir).to_path_buf()
+        } else {
+            // For relative paths, resolve against the working directory
+            self.working_dir.join(original_path.parent().unwrap_or(Path::new(".")))
+        };
+        
+        let original_filename = original_path.file_name().unwrap_or_else(|| std::ffi::OsStr::new("temp.gren"));
+        
+        // Create a unique temporary filename using timestamp and process ID
+        let temp_filename = format!(".tmp_lsp_{}_{:x}_{}", 
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .subsec_nanos(),
+            original_filename.to_string_lossy()
+        );
+        let temp_path = temp_dir.join(temp_filename);
+        
+        info!("💾 Writing in-memory content to temporary file: {}", temp_path.display());
+        info!("📁 Temp file directory: {}", temp_dir.display());
+        
+        // Ensure the temp directory exists
+        if let Err(e) = fs::create_dir_all(&temp_dir).await {
+            warn!("Failed to create temp directory {}: {}", temp_dir.display(), e);
+        }
+        
+        // Write content to temporary file
+        let mut temp_file = fs::File::create(&temp_path).await?;
+        temp_file.write_all(content.as_bytes()).await?;
+        temp_file.flush().await?;
+        
+        // Ensure the file is closed before compilation
+        drop(temp_file);
+        
+        // Compile the temporary file
+        let result = self.run_compiler(&temp_path).await;
+        
+        // Clean up the temporary file
+        if let Err(e) = fs::remove_file(&temp_path).await {
+            warn!("Failed to cleanup temporary file {}: {}", temp_path.display(), e);
+        } else {
+            info!("🗑️  Cleaned up temporary file: {}", temp_path.display());
+        }
+        
+        // Adjust the diagnostic paths to point to the original file
+        match result {
+            Ok(mut compilation_result) => {
+                for diagnostic in &mut compilation_result.diagnostics {
+                    if let Some(ref mut path) = diagnostic.path {
+                        if path == &temp_path {
+                            *path = original_path.to_path_buf();
+                        }
+                    }
+                }
+                
+                // Update the content hash to be based on the actual content, not the temp file
+                compilation_result.content_hash = self.calculate_content_hash_from_string(content);
+                
+                info!("✅ Successfully compiled in-memory content with {} diagnostics", 
+                      compilation_result.diagnostics.len());
+                
+                Ok(compilation_result)
+            }
+            Err(e) => {
+                warn!("❌ Failed to compile temporary file: {}", e);
+                Err(e)
+            }
+        }
+    }
+
+    /// Calculate content hash from string content (for in-memory compilation)
+    fn calculate_content_hash_from_string(&self, content: &str) -> u64 {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let mut hasher = DefaultHasher::new();
+        content.hash(&mut hasher);
+        hasher.finish()
+    }
+
     /// Detect the project type by reading gren.json
     async fn detect_project_type(&mut self) -> Result<ProjectType> {
         // Return cached type if available
