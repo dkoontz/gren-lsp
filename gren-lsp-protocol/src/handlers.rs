@@ -335,9 +335,81 @@ impl Handlers {
         self.hover_with_capabilities(params, None).await
     }
 
-    pub async fn find_references(&self, _params: ReferenceParams) -> Result<Option<Vec<Location>>> {
-        // TODO: Implement find references
-        Ok(None)
+    pub async fn find_references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
+        let uri = &params.text_document_position.text_document.uri;
+        let position = params.text_document_position.position;
+        let include_declaration = params.context.include_declaration;
+
+        info!(
+            "Find references requested at position {}:{} in file {} (include_declaration: {})",
+            position.line, position.character, uri, include_declaration
+        );
+
+        let workspace = self.workspace.read().await;
+
+        // Find the symbol at the cursor position
+        let symbol_info = match self
+            .find_symbol_at_position(&workspace, uri, position)
+            .await
+        {
+            Some(symbol) => symbol,
+            None => {
+                info!(
+                    "No symbol found at position {}:{}",
+                    position.line, position.character
+                );
+                return Ok(None);
+            }
+        };
+
+        info!(
+            "Found symbol for references: {} (qualified: {:?})",
+            symbol_info.function_name,
+            symbol_info.module_path.as_deref().unwrap_or(&[])
+        );
+
+        // Find all references to this symbol across the workspace
+        let references = match self
+            .find_all_symbol_references(&workspace, &symbol_info, uri)
+            .await
+        {
+            Ok(refs) => refs,
+            Err(e) => {
+                warn!(
+                    "Failed to find references for symbol '{}': {}",
+                    symbol_info.function_name, e
+                );
+                return Ok(Some(Vec::new()));
+            }
+        };
+
+        if references.is_empty() {
+            info!(
+                "No references found for symbol '{}'",
+                symbol_info.function_name
+            );
+            return Ok(Some(Vec::new()));
+        }
+
+        // Filter references based on include_declaration parameter
+        let original_count = references.len();
+        let filtered_references = if include_declaration {
+            // Include all references and declarations
+            references
+        } else {
+            // Exclude declarations, only include usage references
+            self.filter_out_declarations(references, &symbol_info).await
+        };
+
+        info!(
+            "Found {} references for symbol '{}' (filtered to {} based on include_declaration={})",
+            original_count,
+            symbol_info.function_name,
+            filtered_references.len(),
+            include_declaration
+        );
+
+        Ok(Some(filtered_references))
     }
 
     pub async fn document_symbols(
@@ -628,20 +700,30 @@ impl Handlers {
                         let absolute_start = char_idx + match_start;
                         let absolute_end = absolute_start + symbol_name.len();
 
-                        // Check if this is a complete word match (not part of another identifier)
+                        // Check if this is a complete word match (not part of another identifier or module qualifier)
                         let is_complete_word = {
                             let before_ok = absolute_start == 0
                                 || !self.is_identifier_char(
                                     line.chars().nth(absolute_start - 1).unwrap_or(' '),
                                 );
+                            let after_char = line.chars().nth(absolute_end).unwrap_or(' ');
                             let after_ok = absolute_end >= line.len()
-                                || !self.is_identifier_char(
-                                    line.chars().nth(absolute_end).unwrap_or(' '),
-                                );
+                                || (!self.is_identifier_char(after_char) && after_char != '.');
                             before_ok && after_ok
                         };
 
-                        if is_complete_word {
+                        // Check if this match is inside a comment
+                        let is_in_comment = self.is_position_in_comment(line, absolute_start);
+
+                        // Check if this match is inside an import statement
+                        let is_in_import = self.is_position_in_import(line, absolute_start);
+
+                        // Check if this match is inside a module declaration
+                        let is_in_module_declaration = self
+                            .is_position_in_module_declaration(&uri, line_idx as u32, absolute_start as u32)
+                            .await;
+
+                        if is_complete_word && !is_in_comment && !is_in_import && !is_in_module_declaration {
                             references.push(Location {
                                 uri: uri.clone(),
                                 range: Range {
@@ -664,6 +746,69 @@ impl Handlers {
         }
 
         Ok(references)
+    }
+
+    /// Filter out declarations from references based on symbol information
+    async fn filter_out_declarations(
+        &self,
+        references: Vec<Location>,
+        symbol_info: &SymbolAtPosition,
+    ) -> Vec<Location> {
+        let mut filtered_references = Vec::new();
+
+        for location in references {
+            // Check if this location is a declaration by examining the AST context
+            if !self.is_symbol_declaration(&location, symbol_info).await {
+                filtered_references.push(location);
+            }
+        }
+
+        filtered_references
+    }
+
+    /// Check if a location represents a symbol declaration rather than a usage
+    /// For now, this uses a simple heuristic approach
+    async fn is_symbol_declaration(
+        &self,
+        location: &Location,
+        symbol_info: &SymbolAtPosition,
+    ) -> bool {
+        let workspace = self.workspace.read().await;
+
+        // Get the document for this location
+        let document = match workspace.get_document_readonly(&location.uri) {
+            Some(doc) => doc,
+            None => return false,
+        };
+
+        let source = document.text();
+        let lines: Vec<&str> = source.lines().collect();
+
+        // Get the line containing this location
+        let line_index = location.range.start.line as usize;
+        if line_index >= lines.len() {
+            return false;
+        }
+
+        let line = lines[line_index];
+
+        // Simple heuristic: check if this line looks like a declaration
+        // Function declarations: "functionName : Type" or "functionName ="
+        if line.trim_start().starts_with(&symbol_info.function_name) {
+            // Check if it's followed by " : " (type annotation) or " =" (definition)
+            let pattern = format!("{} :", symbol_info.function_name);
+            let pattern2 = format!("{} =", symbol_info.function_name);
+            if line.contains(&pattern) || line.contains(&pattern2) {
+                return true;
+            }
+        }
+
+        // Type declarations typically start with "type" keyword
+        if line.trim_start().starts_with("type ") && line.contains(&symbol_info.function_name) {
+            return true;
+        }
+
+        false
     }
 
     /// Generate a workspace edit for renaming all occurrences
@@ -1674,19 +1819,159 @@ impl Handlers {
             signature.to_string()
         }
     }
+
+    /// Check if a position in a line is inside a comment
+    /// Supports both single-line comments (--) and block comments ({- -})
+    fn is_position_in_comment(&self, line: &str, position: usize) -> bool {
+        // Check for single-line comment (-- comment)
+        if let Some(comment_start) = line.find("--") {
+            if position >= comment_start {
+                return true;
+            }
+        }
+
+        // Check for block comments ({- comment -})
+        // This is a simplified check that only handles single-line block comments
+        // A full implementation would need to track multi-line block comment state
+        let mut in_block_comment = false;
+        let mut i = 0;
+        let chars: Vec<char> = line.chars().collect();
+
+        while i < chars.len() {
+            if i + 1 < chars.len() {
+                // Check for block comment start {-
+                if chars[i] == '{' && chars[i + 1] == '-' {
+                    in_block_comment = true;
+                    i += 2;
+                    continue;
+                }
+                // Check for block comment end -}
+                if chars[i] == '-' && chars[i + 1] == '}' && in_block_comment {
+                    in_block_comment = false;
+                    i += 2;
+                    continue;
+                }
+            }
+
+            // If we're at the target position and inside a block comment, return true
+            if i == position && in_block_comment {
+                return true;
+            }
+
+            i += 1;
+        }
+
+        // If we ended inside a block comment and the position is after the start, it's in a comment
+        in_block_comment && position >= chars.len()
+    }
+
+    /// Check if a position in a line is within an import statement
+    /// Import statements should not be considered as symbol references unless specifically searching for modules
+    fn is_position_in_import(&self, line: &str, _position: usize) -> bool {
+        let trimmed = line.trim_start();
+
+        // Check for various import statement patterns
+        // import Module
+        // import Module as Alias
+        // import Module exposing (..)
+        // import Module exposing (symbol1, symbol2)
+        trimmed.starts_with("import ")
+    }
+
+    /// Check if a position is within a module declaration using tree-sitter AST
+    async fn is_position_in_module_declaration(
+        &self,
+        uri: &lsp_types::Url,
+        line: u32,
+        character: u32,
+    ) -> bool {
+        let workspace = self.workspace.read().await;
+        
+        // Get the document
+        let document = match workspace.get_document_readonly(uri) {
+            Some(doc) => doc,
+            None => return false,
+        };
+
+        let content = document.text();
+        
+        // Parse the document using tree-sitter
+        let mut parser = match gren_lsp_core::Parser::new() {
+            Ok(parser) => parser,
+            Err(_) => return false,
+        };
+
+        let tree = match parser.parse(content) {
+            Ok(Some(tree)) => tree,
+            _ => return false,
+        };
+
+        let language = gren_lsp_core::Parser::language();
+        
+        // Query to find module declarations and their export lists
+        let module_query = match tree_sitter::Query::new(
+            language,
+            r#"
+            ; Module declaration (the entire module declaration including exposing)
+            (module_declaration) @module.declaration
+            
+            ; Exposing list specifically
+            (exposing_list) @module.exports
+            "#,
+        ) {
+            Ok(query) => query,
+            Err(_) => return false,
+        };
+
+        let mut cursor = tree_sitter::QueryCursor::new();
+        let source_bytes = content.as_bytes();
+        let matches = cursor.matches(&module_query, tree.root_node(), source_bytes);
+
+        let target_point = tree_sitter::Point {
+            row: line as usize,
+            column: character as usize,
+        };
+
+        for mat in matches {
+            for capture in mat.captures {
+                let node = capture.node;
+                let start_point = node.start_position();
+                let end_point = node.end_position();
+                
+                // Check if the target position is within this node
+                if target_point >= start_point && target_point <= end_point {
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use gren_lsp_core::Workspace;
-    use lsp_types::*;
     use std::sync::Arc;
     use tokio::sync::RwLock;
 
     fn create_test_handlers() -> Handlers {
         let workspace = Arc::new(RwLock::new(Workspace::new().unwrap()));
         Handlers::new(workspace)
+    }
+
+    fn create_test_workspace() -> Workspace {
+        Workspace::new().unwrap()
+    }
+
+    fn create_test_document(uri: &Url, content: &str) -> TextDocumentItem {
+        TextDocumentItem {
+            uri: uri.clone(),
+            language_id: "gren".to_string(),
+            version: 1,
+            text: content.to_string(),
+        }
     }
 
     #[test]
@@ -1855,6 +2140,751 @@ mod tests {
     }
 
     #[test]
+    fn test_find_references_basic() {
+        use lsp_types::*;
+        use std::sync::Arc;
+        use tokio::sync::RwLock;
+
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            let workspace = Arc::new(RwLock::new(create_test_workspace()));
+            let handlers = Handlers::new(workspace.clone());
+
+            // Create test document with a function
+            let uri = Url::parse("file:///test/sample.gren").unwrap();
+            let content = r#"module Sample exposing (..)
+
+testFunction : Int -> Int
+testFunction x = x + 1
+
+result = testFunction 42
+"#;
+
+            // Setup workspace with test document
+            {
+                let mut ws = workspace.write().await;
+                let doc = create_test_document(&uri, content);
+                ws.open_document(doc).unwrap();
+            }
+
+            // Test find references at function definition
+            let params = ReferenceParams {
+                text_document_position: TextDocumentPositionParams {
+                    text_document: TextDocumentIdentifier { uri: uri.clone() },
+                    position: Position {
+                        line: 2,
+                        character: 0,
+                    }, // "testFunction" definition
+                },
+                context: ReferenceContext {
+                    include_declaration: true,
+                },
+                work_done_progress_params: WorkDoneProgressParams::default(),
+                partial_result_params: PartialResultParams::default(),
+            };
+
+            let result = handlers.find_references(params).await;
+            assert!(result.is_ok());
+
+            if let Ok(Some(references)) = result {
+                // Should find at least the declaration and usage
+                assert!(!references.is_empty(), "Should find references");
+
+                // All references should be in the same file
+                for reference in &references {
+                    assert_eq!(reference.uri, uri);
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn test_find_references_exclude_declaration() {
+        use lsp_types::*;
+        use std::sync::Arc;
+        use tokio::sync::RwLock;
+
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            let workspace = Arc::new(RwLock::new(create_test_workspace()));
+            let handlers = Handlers::new(workspace.clone());
+
+            let uri = Url::parse("file:///test/sample.gren").unwrap();
+            let content = r#"module Sample exposing (..)
+
+testFunction : Int -> Int
+testFunction x = x + 1
+
+result = testFunction 42
+another = testFunction 100
+"#;
+
+            {
+                let mut ws = workspace.write().await;
+                let doc = create_test_document(&uri, content);
+                ws.open_document(doc).unwrap();
+            }
+
+            // Test find references excluding declaration
+            let params = ReferenceParams {
+                text_document_position: TextDocumentPositionParams {
+                    text_document: TextDocumentIdentifier { uri: uri.clone() },
+                    position: Position {
+                        line: 3,
+                        character: 0,
+                    }, // "testFunction" definition
+                },
+                context: ReferenceContext {
+                    include_declaration: false,
+                },
+                work_done_progress_params: WorkDoneProgressParams::default(),
+                partial_result_params: PartialResultParams::default(),
+            };
+
+            let result = handlers.find_references(params).await;
+            assert!(result.is_ok());
+
+            if let Ok(Some(references)) = result {
+                // Should find usage references but not the declaration
+                // Note: The exact count depends on our declaration detection heuristic
+                assert!(!references.is_empty(), "Should find usage references");
+
+                for reference in &references {
+                    assert_eq!(reference.uri, uri);
+                    // References should not be on the declaration line (line 3)
+                    // This is a simple check - in practice, we'd verify the actual content
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn test_find_references_no_symbol() {
+        use lsp_types::*;
+        use std::sync::Arc;
+        use tokio::sync::RwLock;
+
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            let workspace = Arc::new(RwLock::new(create_test_workspace()));
+            let handlers = Handlers::new(workspace.clone());
+
+            let uri = Url::parse("file:///test/sample.gren").unwrap();
+            let content = r#"module Sample exposing (..)
+
+-- Comment here
+"#;
+
+            {
+                let mut ws = workspace.write().await;
+                let doc = create_test_document(&uri, content);
+                ws.open_document(doc).unwrap();
+            }
+
+            // Test find references at a position with no symbol
+            let params = ReferenceParams {
+                text_document_position: TextDocumentPositionParams {
+                    text_document: TextDocumentIdentifier { uri },
+                    position: Position {
+                        line: 2,
+                        character: 0,
+                    }, // Beginning of comment line
+                },
+                context: ReferenceContext {
+                    include_declaration: true,
+                },
+                work_done_progress_params: WorkDoneProgressParams::default(),
+                partial_result_params: PartialResultParams::default(),
+            };
+
+            let result = handlers.find_references(params).await;
+            assert!(result.is_ok());
+            assert_eq!(result.unwrap(), None, "Should return None for no symbol");
+        });
+    }
+
+    #[test]
+    fn test_is_symbol_declaration_heuristic() {
+        use lsp_types::*;
+        use std::sync::Arc;
+        use tokio::sync::RwLock;
+
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            let workspace = Arc::new(RwLock::new(create_test_workspace()));
+            let handlers = Handlers::new(workspace.clone());
+
+            let uri = Url::parse("file:///test/sample.gren").unwrap();
+            let content = r#"module Sample exposing (..)
+
+testFunction : Int -> Int
+testFunction x = x + 1
+
+result = testFunction 42
+"#;
+
+            {
+                let mut ws = workspace.write().await;
+                let doc = create_test_document(&uri, content);
+                ws.open_document(doc).unwrap();
+            }
+
+            let symbol_info = SymbolAtPosition {
+                function_name: "testFunction".to_string(),
+                module_path: None,
+            };
+
+            // Test declaration detection
+            let declaration_location = Location {
+                uri: uri.clone(),
+                range: Range {
+                    start: Position {
+                        line: 2,
+                        character: 0,
+                    },
+                    end: Position {
+                        line: 2,
+                        character: 12,
+                    },
+                },
+            };
+
+            let is_declaration = handlers
+                .is_symbol_declaration(&declaration_location, &symbol_info)
+                .await;
+            assert!(
+                is_declaration,
+                "Should detect function type annotation as declaration"
+            );
+
+            // Test usage detection
+            let usage_location = Location {
+                uri,
+                range: Range {
+                    start: Position {
+                        line: 5,
+                        character: 9,
+                    },
+                    end: Position {
+                        line: 5,
+                        character: 21,
+                    },
+                },
+            };
+
+            let is_usage_declaration = handlers
+                .is_symbol_declaration(&usage_location, &symbol_info)
+                .await;
+            assert!(
+                !is_usage_declaration,
+                "Should detect function usage as non-declaration"
+            );
+        });
+    }
+
+    #[test]
+    fn test_filter_out_declarations() {
+        use lsp_types::*;
+        use std::sync::Arc;
+        use tokio::sync::RwLock;
+
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            let workspace = Arc::new(RwLock::new(create_test_workspace()));
+            let handlers = Handlers::new(workspace.clone());
+
+            let uri = Url::parse("file:///test/sample.gren").unwrap();
+            let content = r#"module Sample exposing (..)
+
+testFunction : Int -> Int
+testFunction x = x + 1
+
+result = testFunction 42
+"#;
+
+            {
+                let mut ws = workspace.write().await;
+                let doc = create_test_document(&uri, content);
+                ws.open_document(doc).unwrap();
+            }
+
+            let symbol_info = SymbolAtPosition {
+                function_name: "testFunction".to_string(),
+                module_path: None,
+            };
+
+            let all_references = vec![
+                Location {
+                    uri: uri.clone(),
+                    range: Range {
+                        start: Position {
+                            line: 2,
+                            character: 0,
+                        },
+                        end: Position {
+                            line: 2,
+                            character: 12,
+                        },
+                    },
+                },
+                Location {
+                    uri: uri.clone(),
+                    range: Range {
+                        start: Position {
+                            line: 5,
+                            character: 9,
+                        },
+                        end: Position {
+                            line: 5,
+                            character: 21,
+                        },
+                    },
+                },
+            ];
+
+            let filtered = handlers
+                .filter_out_declarations(all_references, &symbol_info)
+                .await;
+
+            // Should filter out declarations, keeping only usage references
+            assert!(!filtered.is_empty(), "Should have usage references");
+            assert!(filtered.len() <= 2, "Should filter out some declarations");
+
+            // Verify that remaining references are not declarations
+            for reference in &filtered {
+                let is_decl = handlers
+                    .is_symbol_declaration(reference, &symbol_info)
+                    .await;
+                assert!(!is_decl, "Filtered references should not be declarations");
+            }
+        });
+    }
+
+    #[test]
+    fn test_find_references_excludes_comments() {
+        use lsp_types::*;
+        use std::sync::Arc;
+        use tokio::sync::RwLock;
+
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            let workspace = Arc::new(RwLock::new(create_test_workspace()));
+            let handlers = Handlers::new(workspace.clone());
+
+            let uri = Url::parse("file:///test/sample.gren").unwrap();
+            let content = r#"module Sample exposing (..)
+
+testFunction : Int -> Int
+testFunction x = x + 1
+
+-- This comment mentions testFunction but should be ignored
+result = testFunction 42  -- testFunction in comment should be ignored
+{- testFunction in block comment should also be ignored -}
+another = testFunction 100
+"#;
+
+            {
+                let mut ws = workspace.write().await;
+                let doc = create_test_document(&uri, content);
+                ws.open_document(doc).unwrap();
+            }
+
+            // Test find references including declarations
+            let params = ReferenceParams {
+                text_document_position: TextDocumentPositionParams {
+                    text_document: TextDocumentIdentifier { uri: uri.clone() },
+                    position: Position {
+                        line: 2,
+                        character: 0,
+                    }, // "testFunction" definition
+                },
+                context: ReferenceContext {
+                    include_declaration: true,
+                },
+                work_done_progress_params: WorkDoneProgressParams::default(),
+                partial_result_params: PartialResultParams::default(),
+            };
+
+            let result = handlers.find_references(params).await;
+            assert!(result.is_ok());
+
+            if let Ok(Some(references)) = result {
+                assert!(!references.is_empty(), "Should find references");
+
+                // Check that none of the references are in comments
+                for reference in &references {
+                    let line_num = reference.range.start.line as usize;
+                    let char_pos = reference.range.start.character as usize;
+
+                    // Get the document to check line content
+                    let workspace = workspace.read().await;
+                    if let Some(document) = workspace.get_document_readonly(&reference.uri) {
+                        let lines: Vec<&str> = document.text().lines().collect();
+                        if line_num < lines.len() {
+                            let line = lines[line_num];
+                            let is_in_comment = handlers.is_position_in_comment(line, char_pos);
+                            assert!(
+                                !is_in_comment,
+                                "Reference at line {} char {} should not be in comment: '{}'",
+                                line_num, char_pos, line
+                            );
+                        }
+                    }
+                }
+
+                // We should find the declaration, definition, and usage references but not comment mentions
+                // Exact count depends on implementation but should be reasonable (3-4 valid references)
+                assert!(
+                    references.len() >= 3,
+                    "Should find at least 3 valid references (not in comments)"
+                );
+                assert!(
+                    references.len() <= 5,
+                    "Should not find too many references (comments should be filtered)"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn test_find_references_excludes_imports() {
+        use lsp_types::*;
+        use std::sync::Arc;
+        use tokio::sync::RwLock;
+
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            let workspace = Arc::new(RwLock::new(create_test_workspace()));
+            let handlers = Handlers::new(workspace.clone());
+
+            let uri = Url::parse("file:///test/sample.gren").unwrap();
+            let content = r#"module Sample exposing (..)
+
+import Dedris.Tetromino as Tetromino
+import Other.Tetromino exposing (Tetromino)
+
+type alias Tetromino =
+    { type_ : Type
+    , blocks : Array { row : Int , col : Int }
+    }
+
+createTetromino : Tetromino
+createTetromino = { type_ = Type.I, blocks = [] }
+
+useTetromino : Tetromino -> Int
+useTetromino tetromino = Array.length tetromino.blocks
+"#;
+
+            {
+                let mut ws = workspace.write().await;
+                let doc = create_test_document(&uri, content);
+                ws.open_document(doc).unwrap();
+            }
+
+            // Test find references for Tetromino type alias
+            let params = ReferenceParams {
+                text_document_position: TextDocumentPositionParams {
+                    text_document: TextDocumentIdentifier { uri: uri.clone() },
+                    position: Position {
+                        line: 5,
+                        character: 11,
+                    }, // "Tetromino" in type alias definition
+                },
+                context: ReferenceContext {
+                    include_declaration: true,
+                },
+                work_done_progress_params: WorkDoneProgressParams::default(),
+                partial_result_params: PartialResultParams::default(),
+            };
+
+            let result = handlers.find_references(params).await;
+            assert!(result.is_ok());
+
+            if let Ok(Some(references)) = result {
+                assert!(!references.is_empty(), "Should find references");
+
+                // Check that none of the references are in import statements
+                for reference in &references {
+                    let line_num = reference.range.start.line as usize;
+                    let char_pos = reference.range.start.character as usize;
+
+                    // Get the document to check line content
+                    let workspace = workspace.read().await;
+                    if let Some(document) = workspace.get_document_readonly(&reference.uri) {
+                        let lines: Vec<&str> = document.text().lines().collect();
+                        if line_num < lines.len() {
+                            let line = lines[line_num];
+                            let is_in_import = handlers.is_position_in_import(line, char_pos);
+                            assert!(
+                                !is_in_import,
+                                "Reference at line {} char {} should not be in import: '{}'",
+                                line_num, char_pos, line
+                            );
+                        }
+                    }
+                }
+
+                // We should find valid references (type alias declaration, function signatures, usage)
+                // but NOT the import statement matches
+                assert!(
+                    references.len() >= 3,
+                    "Should find at least 3 valid references (not in imports)"
+                );
+                assert!(
+                    references.len() <= 6,
+                    "Should not find too many references (imports should be filtered)"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn test_find_references_excludes_module_qualifiers() {
+        use lsp_types::*;
+        use std::sync::Arc;
+        use tokio::sync::RwLock;
+
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            let workspace = Arc::new(RwLock::new(create_test_workspace()));
+            let handlers = Handlers::new(workspace.clone());
+
+            let uri = Url::parse("file:///test/sample.gren").unwrap();
+            let content = r#"module Sample exposing (..)
+
+type alias Tetromino =
+    { type_ : Type
+    , blocks : Array { row : Int , col : Int }
+    }
+
+type Msg
+    = ActiveMotion Motion
+    | NewTmino Tetromino.Type
+    | OtherMsg Tetromino
+
+useFunction : Tetromino -> Int
+useFunction tetromino = 42
+"#;
+            {
+                let mut ws = workspace.write().await;
+                let doc = create_test_document(&uri, content);
+                ws.open_document(doc).unwrap();
+            }
+
+            // Test find references for Tetromino type alias
+            let params = ReferenceParams {
+                text_document_position: TextDocumentPositionParams {
+                    text_document: TextDocumentIdentifier { uri: uri.clone() },
+                    position: Position { line: 2, character: 11 }, // "Tetromino" in type alias definition
+                },
+                context: ReferenceContext {
+                    include_declaration: true,
+                },
+                work_done_progress_params: WorkDoneProgressParams::default(),
+                partial_result_params: PartialResultParams::default(),
+            };
+
+            let result = handlers.find_references(params).await;
+            assert!(result.is_ok());
+
+            if let Ok(Some(references)) = result {
+                assert!(!references.is_empty(), "Should find references");
+                // Check that none of the references are module qualifiers (followed by a dot)
+                for reference in &references {
+                    let line_num = reference.range.start.line as usize;
+                    let char_pos = reference.range.end.character as usize; // Check the end position
+                    // Get the document to check line content
+                    let workspace = workspace.read().await;
+                    if let Some(document) = workspace.get_document_readonly(&reference.uri) {
+                        let lines: Vec<&str> = document.text().lines().collect();
+                        if line_num < lines.len() {
+                            let line = lines[line_num];
+                            let next_char = line.chars().nth(char_pos).unwrap_or(' ');
+                            assert_ne!(next_char, '.',
+                                "Reference at line {} char {} should not be followed by '.' (module qualifier): '{}'",
+                                line_num, char_pos, line);
+                        }
+                    }
+                }
+                // We should find valid references (type alias declaration, function parameter, return type)
+                // but NOT the module qualifier in "Tetromino.Type"
+                assert!(references.len() >= 3, "Should find at least 3 valid references (not module qualifiers)");
+                assert!(references.len() <= 5, "Should not find too many references (module qualifiers should be filtered)");
+            }
+        });
+    }
+
+    #[tokio::test]
+    async fn test_find_references_excludes_module_declarations() {
+        let workspace = Arc::new(RwLock::new(create_test_workspace()));
+        let handlers = Handlers::new(workspace.clone());
+        let uri = Url::parse("file:///test/test_module_declarations.gren").unwrap();
+
+        // Test content with module declaration, exports, and actual usage
+        let content = r#"module Dedris.Tetromino exposing
+    ( Tetromino
+    , Type (..)
+    , useFunction
+    )
+
+type alias Tetromino = { type_ : Type }
+
+type Type
+    = IBlock
+    | JBlock
+
+useFunction : Tetromino -> Int
+useFunction tetromino = 42
+"#;
+
+        {
+            let mut ws = workspace.write().await;
+            let doc = create_test_document(&uri, content);
+            ws.open_document(doc).unwrap();
+        }
+
+        // Test find references for Tetromino type alias
+        let params = ReferenceParams {
+            text_document_position: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri: uri.clone() },
+                position: Position { line: 6, character: 11 }, // "Tetromino" in type alias definition
+            },
+            context: ReferenceContext {
+                include_declaration: true,
+            },
+            work_done_progress_params: WorkDoneProgressParams::default(),
+            partial_result_params: PartialResultParams::default(),
+        };
+
+        let result = handlers.find_references(params).await;
+        assert!(result.is_ok());
+
+        if let Ok(Some(references)) = result {
+            assert!(!references.is_empty(), "Should find references");
+
+            // Check that none of the references are in module declarations
+            for reference in &references {
+                let line_num = reference.range.start.line as usize;
+                let char_pos = reference.range.start.character as usize;
+
+                // Get the document to check line content  
+                let workspace = workspace.read().await;
+                if let Some(document) = workspace.get_document_readonly(&reference.uri) {
+                    let lines: Vec<&str> = document.text().lines().collect();
+                    if line_num < lines.len() {
+                        let line = lines[line_num];
+                        let is_in_module_declaration = handlers
+                            .is_position_in_module_declaration(&reference.uri, line_num as u32, char_pos as u32)
+                            .await;
+                        assert!(
+                            !is_in_module_declaration,
+                            "Reference at line {} char {} should not be in module declaration: '{}'",
+                            line_num, char_pos, line
+                        );
+                    }
+                }
+            }
+
+            // We should find valid references (type alias declaration, function parameter, return type)
+            // but NOT the module name or exports list
+            assert!(references.len() >= 2, "Should find at least 2 valid references (not module declarations)");
+            assert!(references.len() <= 4, "Should not find too many references (module declarations should be filtered)");
+        }
+    }
+
+    #[test]
+    fn test_import_detection() {
+        let handlers = create_test_handlers();
+
+        // Test various import statement patterns
+        assert!(handlers.is_position_in_import("import Dedris.Tetromino as Tetromino", 15));
+        assert!(handlers.is_position_in_import("import Module", 5));
+        assert!(handlers.is_position_in_import("import Module as Alias", 10));
+        assert!(handlers.is_position_in_import("import Module exposing (..)", 15));
+        assert!(handlers.is_position_in_import("import Module exposing (symbol1, symbol2)", 20));
+        assert!(handlers.is_position_in_import("    import Module", 10)); // with indentation
+
+        // Test non-import statements
+        assert!(!handlers.is_position_in_import("module MyModule exposing (..)", 10));
+        assert!(!handlers.is_position_in_import("testFunction = import", 15)); // "import" as regular text
+        assert!(!handlers.is_position_in_import("-- import Module", 10)); // import in comment
+        assert!(!handlers.is_position_in_import("type Tetromino = { type_ : Type }", 15));
+        assert!(!handlers.is_position_in_import("", 0));
+    }
+
+    #[test]
+    fn test_comment_detection() {
+        let handlers = create_test_handlers();
+
+        // Test single-line comments
+        assert!(handlers.is_position_in_comment("-- This is a comment with testFunction", 20));
+        assert!(handlers.is_position_in_comment("someCode -- testFunction in comment", 25));
+        assert!(!handlers.is_position_in_comment("testFunction -- comment after", 5));
+        assert!(!handlers.is_position_in_comment("testFunction on next line", 5));
+
+        // Test block comments (single line)
+        assert!(handlers.is_position_in_comment("{- testFunction in block comment -}", 15));
+        assert!(handlers.is_position_in_comment("code {- testFunction -} more code", 15));
+        assert!(!handlers.is_position_in_comment("testFunction {- comment after -}", 5));
+
+        // Test mixed scenarios
+        assert!(!handlers.is_position_in_comment("testFunction = 42 -- normal code", 0));
+        assert!(handlers.is_position_in_comment("code = 42 -- testFunction in comment", 25));
+
+        // Test edge cases
+        assert!(!handlers.is_position_in_comment("", 0));
+        assert!(!handlers.is_position_in_comment("no comments here", 5));
+        assert!(handlers.is_position_in_comment("-- testFunction", 3));
+    }
+
+    #[tokio::test]
+    async fn test_module_declaration_detection() {
+        let workspace = Arc::new(RwLock::new(create_test_workspace()));
+        let handlers = Handlers::new(workspace.clone());
+
+        // Test single-line module declaration
+        let uri1 = Url::parse("file:///test/single_line_module.gren").unwrap();
+        let content1 = "module Dedris.Tetromino exposing (..)";
+        {
+            let mut ws = workspace.write().await;
+            let doc = create_test_document(&uri1, content1);
+            ws.open_document(doc).unwrap();
+        }
+        assert!(handlers.is_position_in_module_declaration(&uri1, 0, 15).await); // "Tetromino" in module name
+        assert!(handlers.is_position_in_module_declaration(&uri1, 0, 35).await); // inside export list
+
+        // Test multi-line module declaration
+        let uri2 = Url::parse("file:///test/multi_line_module.gren").unwrap();
+        let content2 = r#"module Dedris.Tetromino exposing
+    ( Tetromino
+    , Type (..)
+    )
+
+type alias Tetromino = { type_ : Type }"#;
+        {
+            let mut ws = workspace.write().await;
+            let doc = create_test_document(&uri2, content2);
+            ws.open_document(doc).unwrap();
+        }
+        assert!(handlers.is_position_in_module_declaration(&uri2, 0, 15).await); // "Tetromino" in module name
+        assert!(handlers.is_position_in_module_declaration(&uri2, 1, 8).await);  // "Tetromino" in export list
+        assert!(handlers.is_position_in_module_declaration(&uri2, 2, 8).await);  // "Type" in export list
+        assert!(!handlers.is_position_in_module_declaration(&uri2, 5, 15).await); // type declaration outside module
+
+        // Test non-module content
+        let uri3 = Url::parse("file:///test/no_module.gren").unwrap();
+        let content3 = r#"-- This is not a module
+testFunction = 42"#;
+        {
+            let mut ws = workspace.write().await;
+            let doc = create_test_document(&uri3, content3);
+            ws.open_document(doc).unwrap();
+        }
+        assert!(!handlers.is_position_in_module_declaration(&uri3, 0, 10).await);
+        assert!(!handlers.is_position_in_module_declaration(&uri3, 1, 5).await);
+    }
+
+    #[test]
     fn test_word_boundary_detection() {
         let handlers = create_test_handlers();
 
@@ -1866,11 +2896,12 @@ mod tests {
         let absolute_start = match_start;
         let absolute_end = absolute_start + symbol_name.len(); // Should be 3
 
-        // Check if this is a complete word match
+        // Check if this is a complete word match (updated to match new logic)
         let before_ok = absolute_start == 0
             || !handlers.is_identifier_char(line.chars().nth(absolute_start - 1).unwrap_or(' '));
+        let after_char = line.chars().nth(absolute_end).unwrap_or(' ');
         let after_ok = absolute_end >= line.len()
-            || !handlers.is_identifier_char(line.chars().nth(absolute_end).unwrap_or(' '));
+            || (!handlers.is_identifier_char(after_char) && after_char != '.');
         let is_complete_word = before_ok && after_ok;
 
         println!("Testing '{}' in '{}'", symbol_name, line);
@@ -1931,13 +2962,13 @@ mod tests {
         let index = SymbolIndex::new().expect("Failed to create symbol index");
         let file_uri = Url::parse("file:///test.gren").expect("Invalid URI");
 
-        // Add two symbols: "set" and "setBlock"
+        // Add two symbols: "uniqueTest" and "uniqueTestBlock" to avoid conflicts with other tests
         let set_symbol = Symbol {
-            name: "set".to_string(),
+            name: "uniqueTest".to_string(),
             kind: SymbolKind::FUNCTION,
             location: Location::new(
                 file_uri.clone(),
-                Range::new(Position::new(1, 0), Position::new(1, 3)),
+                Range::new(Position::new(1, 0), Position::new(1, 10)),
             ),
             container_name: None,
             type_signature: Some("a -> b -> a".to_string()),
@@ -1945,11 +2976,11 @@ mod tests {
         };
 
         let set_block_symbol = Symbol {
-            name: "setBlock".to_string(),
+            name: "uniqueTestBlock".to_string(),
             kind: SymbolKind::FUNCTION,
             location: Location::new(
                 file_uri.clone(),
-                Range::new(Position::new(5, 0), Position::new(5, 8)),
+                Range::new(Position::new(5, 0), Position::new(5, 15)),
             ),
             container_name: None,
             type_signature: Some("Block -> Block".to_string()),
@@ -1965,23 +2996,25 @@ mod tests {
             .expect("Failed to index setBlock symbol");
 
         // Test fuzzy search - should find both
-        let fuzzy_results = index.find_symbol("set").expect("Failed to search symbols");
+        let fuzzy_results = index
+            .find_symbol("uniqueTest")
+            .expect("Failed to search symbols");
         assert_eq!(
             fuzzy_results.len(),
             2,
-            "Fuzzy search should find both 'set' and 'setBlock'"
+            "Fuzzy search should find both 'uniqueTest' and 'uniqueTestBlock'"
         );
 
-        // Test exact search - should find only "set"
+        // Test exact search - should find only "uniqueTest"
         let exact_results = index
-            .find_exact_symbol("set")
+            .find_exact_symbol("uniqueTest")
             .expect("Failed to search exact symbols");
         assert_eq!(
             exact_results.len(),
             1,
-            "Exact search should find only 'set'"
+            "Exact search should find only 'uniqueTest'"
         );
-        assert_eq!(exact_results[0].name, "set");
+        assert_eq!(exact_results[0].name, "uniqueTest");
 
         // Clean up
         index

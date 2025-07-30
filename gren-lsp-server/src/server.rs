@@ -106,7 +106,7 @@ impl LanguageServer for GrenLanguageServer {
                     ..Default::default()
                 }),
                 // TODO: Implement these features
-                // references_provider: Some(OneOf::Left(true)),
+                references_provider: Some(OneOf::Left(true)),
                 // code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
                 rename_provider: Some(OneOf::Left(true)),
                 ..Default::default()
@@ -295,6 +295,11 @@ impl LanguageServer for GrenLanguageServer {
     ) -> Result<Option<Vec<SymbolInformation>>> {
         let handlers = Handlers::new(self.workspace.clone());
         handlers.workspace_symbols(params).await
+    }
+
+    async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
+        let handlers = Handlers::new(self.workspace.clone());
+        handlers.find_references(params).await
     }
 
     async fn rename(&self, params: RenameParams) -> Result<Option<WorkspaceEdit>> {
