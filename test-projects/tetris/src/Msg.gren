@@ -1,0 +1,20 @@
+module Msg exposing ( Msg (..) )
+
+import Dedris.Motion exposing ( Motion )
+import Dedris.Tetromino as Tetromino
+import Keyboard.Event exposing ( KeyboardEvent )
+
+
+-- Interne Benachrichtigungen
+type Msg
+    = ActiveMotion Motion
+    | KeyDown KeyboardEvent
+    | MoveDown
+    | MoveLeft
+    | MoveRightly
+    | NewTmino Tetromino.Type
+    | Reload
+    | RotateLeft
+    | RotateRight
+    | Tick
+    | Viewport { height : Int , width : Int }

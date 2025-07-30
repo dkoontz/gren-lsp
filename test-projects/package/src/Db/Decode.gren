@@ -1,0 +1,578 @@
+module Db.Decode exposing
+    ( Decoder
+
+    -- Single Fields
+    , bool
+    , float
+    , int
+    , posix
+    , string
+    , maybe
+
+    -- Multiple Fields
+    , get2
+    , get3
+    , get4
+    , get5
+    , get6
+    , get7
+    , get8
+
+    -- Fancy Decoding
+    , map
+    , succeed
+    , fail
+    , andThen
+
+    -- ws4sql Helpers
+    , ws4sqlQueryResponse
+    , ws4sqlStatementResponse
+    )
+
+{-| Decode SQL results into Gren values.
+
+These are typically used in the `Db.get*` functions via the `decoder` field,
+where the string value matches the name of the field in the query.
+For example:
+
+    -- Assuming a table with id INTEGER, name TEXT
+    Db.getOne connection
+        { query = "select * from users where id = :id"
+        , parameters = [ Db.Encode.int 1 ]
+        , decoder = 
+            Db.Decode.get2
+                (Db.Decode.int "id")
+                (Db.Decode.string "name")
+                (\id name -> { id = id, name = name })
+        }
+
+@docs Decoder
+
+## Decoding Individual Fields
+
+Use these functions to decode an individual field in a row.
+You'll usually be using these to build up larger decoders via one of the `getN` functions.
+
+@docs string, int, float, bool, posix, maybe
+
+## Decoding Multiple Fields
+
+Use these get functions to build a decoder that gets multiple fields from a row.
+
+@docs get2, get3, get4, get5, get6, get7, get8
+
+## Fancy Decoding
+
+Build more complex decoders with these functions.
+
+@docs map, succeed, fail, andThen
+
+## Util
+
+You shouldn't need these unless you are bypassing this package's API
+to interact with the ws4sql server directly.
+
+@docs ws4sqlQueryResponse, ws4sqlStatementResponse
+-}
+
+import Db.Encode
+import Json.Decode
+import Json.Encode
+import Time
+
+
+{-| A decoder for a database row.
+-}
+type Decoder a
+    = Decoder (Json.Decode.Decoder a)
+    | FieldDecoder { name : String, decoder : Json.Decode.Decoder a }
+
+
+{-| Result of a failed attempt to decode.
+-}
+type Error
+    = Error
+
+
+-- FIELDS
+
+
+{-| Decode a boolean field.
+
+Booleans in sqlite can be stored as integers with 1 and 0 as True and False,
+or as a string with value "TRUE" or "FALSE". All other values will fail decoding.
+See <https://www.sqlite.org/datatype3.html#boolean_datatype>
+-}
+bool : String -> Decoder Bool
+bool name =
+    FieldDecoder
+        { name = name
+        , decoder =
+            Json.Decode.oneOf
+                [ Json.Decode.int
+                    |> Json.Decode.andThen
+                        (\i ->
+                            when i is
+                                0 -> Json.Decode.succeed False
+                                1 -> Json.Decode.succeed True
+                                _ -> Json.Decode.fail "Got unexpected integer in boolean field"
+                        )
+                , Json.Decode.string
+                    |> Json.Decode.andThen
+                        (\s ->
+                            when s is
+                                "TRUE" -> Json.Decode.succeed True
+                                "FALSE" -> Json.Decode.succeed False
+                                _ -> Json.Decode.fail "Got unexpected string in boolean field"
+                        )
+                ]
+        }
+
+
+{-| Decode an integer field.
+-}
+int : String -> Decoder Int
+int name =
+    FieldDecoder
+        { name = name
+        , decoder = Json.Decode.int
+        }
+
+
+{-| Decode a float field.
+-}
+float : String -> Decoder Float
+float name =
+    FieldDecoder
+        { name = name
+        , decoder = Json.Decode.float
+        }
+
+
+{-| Decode an integer field into a Time.Posix value.
+
+The integer in the database should represent unix time in milliseconds
+(the number of milliseconds since 1970 January 1 at 00:00:00 UTC).
+This is how a `Time.Posix` value will be saved when using [Db.Encode.posix](Db.Encode#posix).
+-}
+posix : String -> Decoder Time.Posix
+posix name =
+    FieldDecoder
+        { name = name
+        , decoder =
+            Json.Decode.map
+                Time.millisToPosix
+                Json.Decode.int
+        }
+
+
+{-| Decode a string field.
+-}
+string : String -> Decoder String
+string name =
+    FieldDecoder
+        { name = name
+        , decoder = Json.Decode.string
+        }
+
+
+{-| Decode a nullable field in the database.
+
+The first parameter is the decoder function for the field type if the value is not null.
+For example, to decode a nullable INTEGER field:
+
+    Db.Decode.maybe Db.Decode.int "myField"
+-}
+maybe : (String -> Decoder a) -> String -> Decoder (Maybe a)
+maybe toDecoder fieldName =
+    when toDecoder fieldName is
+        Decoder decoder ->
+            Decoder <|
+                Json.Decode.nullable decoder
+
+        FieldDecoder { name, decoder } ->
+            FieldDecoder
+                { name = name
+                , decoder =
+                    Json.Decode.nullable decoder
+                }
+
+
+-- ROWS
+
+
+{-| Create a decoder that gets 2 fields from a row.
+-}
+get2 : 
+    Decoder a -> 
+    Decoder b -> 
+    (a -> b -> c) -> 
+    Decoder c
+get2 decoderA decoderB mapper =
+    decoderA
+        |> andThen
+            (\a ->
+                decoderB
+                    |> andThen
+                        (\b ->
+                            succeed <|
+                                mapper a b
+                        )
+            )
+
+
+{-| Create a decoder that gets 3 fields from a row.
+-}
+get3 : 
+    Decoder a -> 
+    Decoder b -> 
+    Decoder c -> 
+    (a -> b -> c -> d) -> 
+    Decoder d
+get3 decoderA decoderB decoderC mapper =
+    decoderA
+        |> andThen
+            (\a ->
+                decoderB
+                    |> andThen
+                        (\b ->
+                            decoderC
+                                |> andThen
+                                    (\c ->
+                                        succeed <|
+                                            mapper a b c
+                                    )
+                        )
+            )
+
+
+{-| Create a decoder that gets 4 fields from a row.
+-}
+get4 : 
+    Decoder a -> 
+    Decoder b -> 
+    Decoder c -> 
+    Decoder d -> 
+    (a -> b -> c -> d -> e) -> 
+    Decoder e
+get4 decoderA decoderB decoderC decoderD mapper =
+    decoderA
+        |> andThen
+            (\a ->
+                decoderB
+                    |> andThen
+                        (\b ->
+                            decoderC
+                                |> andThen
+                                    (\c ->
+                                        decoderD
+                                            |> andThen
+                                                (\d ->
+                                                    succeed <|
+                                                        mapper a b c d
+                                                )
+                                    )
+                        )
+            )
+
+
+{-| Create a decoder that gets 5 fields from a row.
+-}
+get5 : 
+    Decoder a -> 
+    Decoder b -> 
+    Decoder c -> 
+    Decoder d -> 
+    Decoder e -> 
+    (a -> b -> c -> d -> e -> f) -> 
+    Decoder f
+get5 decoderA decoderB decoderC decoderD decoderE mapper =
+    decoderA
+        |> andThen
+            (\a ->
+                decoderB
+                    |> andThen
+                        (\b ->
+                            decoderC
+                                |> andThen
+                                    (\c ->
+                                        decoderD
+                                            |> andThen
+                                                (\d ->
+                                                    decoderE
+                                                        |> andThen
+                                                            (\e ->
+                                                                succeed <|
+                                                                    mapper a b c d e
+                                                            )
+                                                )
+                                    )
+                        )
+            )
+
+
+{-| Create a decoder that gets 6 fields from a row.
+-}
+get6 : 
+    Decoder a -> 
+    Decoder b -> 
+    Decoder c -> 
+    Decoder d -> 
+    Decoder e -> 
+    Decoder f -> 
+    (a -> b -> c -> d -> e -> f -> g) -> 
+    Decoder g
+get6 decoderA decoderB decoderC decoderD decoderE decoderF mapper =
+    decoderA
+        |> andThen
+            (\a ->
+                decoderB
+                    |> andThen
+                        (\b ->
+                            decoderC
+                                |> andThen
+                                    (\c ->
+                                        decoderD
+                                            |> andThen
+                                                (\d ->
+                                                    decoderE
+                                                        |> andThen
+                                                            (\e ->
+                                                                decoderF
+                                                                    |> andThen
+                                                                        (\f ->
+                                                                            succeed <|
+                                                                                mapper a b c d e f
+                                                                        )
+                                                            )
+                                                )
+                                    )
+                        )
+            )
+
+
+{-| Create a decoder that gets 7 fields from a row.
+-}
+get7 : 
+    Decoder a -> 
+    Decoder b -> 
+    Decoder c -> 
+    Decoder d -> 
+    Decoder e -> 
+    Decoder f -> 
+    Decoder g -> 
+    (a -> b -> c -> d -> e -> f -> g -> h) -> 
+    Decoder h
+get7 decoderA decoderB decoderC decoderD decoderE decoderF decoderG mapper =
+    decoderA
+        |> andThen
+            (\a ->
+                decoderB
+                    |> andThen
+                        (\b ->
+                            decoderC
+                                |> andThen
+                                    (\c ->
+                                        decoderD
+                                            |> andThen
+                                                (\d ->
+                                                    decoderE
+                                                        |> andThen
+                                                            (\e ->
+                                                                decoderF
+                                                                    |> andThen
+                                                                        (\f ->
+                                                                            decoderG
+                                                                                |> andThen
+                                                                                    (\g ->
+                                                                                        succeed <|
+                                                                                            mapper a b c d e f g
+                                                                                    )
+                                                                        )
+                                                            )
+                                                )
+                                    )
+                        )
+            )
+
+
+{-| Create a decoder that gets 8 fields from a row.
+
+If you need more than 8, you can tack on more with [`andThen`](#andThen).
+-}
+get8 : 
+    Decoder a -> 
+    Decoder b -> 
+    Decoder c -> 
+    Decoder d -> 
+    Decoder e -> 
+    Decoder f -> 
+    Decoder g -> 
+    Decoder h -> 
+    (a -> b -> c -> d -> e -> f -> g -> h -> i) -> 
+    Decoder i
+get8 decoderA decoderB decoderC decoderD decoderE decoderF decoderG decoderH mapper =
+    decoderA
+        |> andThen
+            (\a ->
+                decoderB
+                    |> andThen
+                        (\b ->
+                            decoderC
+                                |> andThen
+                                    (\c ->
+                                        decoderD
+                                            |> andThen
+                                                (\d ->
+                                                    decoderE
+                                                        |> andThen
+                                                            (\e ->
+                                                                decoderF
+                                                                    |> andThen
+                                                                        (\f ->
+                                                                            decoderG
+                                                                                |> andThen
+                                                                                    (\g ->
+                                                                                        decoderH
+                                                                                            |> andThen
+                                                                                                (\h ->
+                                                                                                    succeed <|
+                                                                                                        mapper a b c d e f g h
+                                                                                                )
+                                                                                    )
+                                                                        )
+                                                            )
+                                                )
+                                    )
+                        )
+            )
+
+
+-- FANCY DECODING
+
+
+{-| Create a decoder that's hard-coded to a specific value.
+
+For example:
+
+    Decode.succeed "abc"
+
+will always decode to "abc" regardless of input.
+
+You will most likely use this in conjunction with [`andThen`](#andThen).
+-}
+succeed : a -> Decoder a
+succeed a =
+    Decoder <|
+        Json.Decode.succeed a
+
+
+{-| Force a decoder to fail.
+
+You will most likely use this in conjunction with [`andThen`](#andThen).
+-}
+fail : String -> Decoder a
+fail reason =
+    Decoder <|
+        Json.Decode.fail reason
+
+
+{-| Update a decoder with a function that will modify the decoded value.
+
+For example:
+
+    Decode.string "email"
+        |> Decode.map Email.fromString
+-}
+map : (a -> b) -> Decoder a -> Decoder b
+map mapper decoder_ =
+    when decoder_ is
+        Decoder decoder ->
+            Decoder <|
+                Json.Decode.map mapper decoder
+
+        FieldDecoder { name, decoder } ->
+            FieldDecoder
+                { name = name
+                , decoder =
+                    Json.Decode.map mapper decoder
+                }
+
+
+{-| Chain decoders together.
+
+You will most likely use this conjunction with [`succeed`](#succeed) and [`fail`](#fail).
+For example:
+
+    Decode.string "email"
+        |> Decode.andThen
+            (\email ->
+                when Email.fromString email is
+                    Just email -> Decode.succeed email
+                    Nothing -> Decode.fail "invalid email"
+            )
+
+-}
+andThen : (a -> Decoder b) -> Decoder a -> Decoder b
+andThen mapper decoder =
+    unwrap decoder
+        |> Json.Decode.andThen (mapper >> unwrap)
+        |> Decoder
+
+
+-- HELPERS
+
+
+unwrap : Decoder a -> Json.Decode.Decoder a
+unwrap decoder_ =
+    when decoder_ is
+        Decoder decoder ->
+            decoder
+
+        FieldDecoder { name, decoder } ->
+            Json.Decode.field name decoder
+
+
+{-| Get a json decoder for a raw ws4sql query response.
+-}
+ws4sqlQueryResponse : Decoder a -> Json.Decode.Decoder (Array a)
+ws4sqlQueryResponse decoder =
+    -- See https://germ.gitbook.io/ws4sqlite/documentation/responses
+    -- We will get a response that looks like this:
+    --     {
+    --         "results": [
+    --             {
+    --                 "success": true,
+    --                 "resultHeaders": [ "id", "name" ],
+    --                 "resultSet": [
+    --                     { "id": 1, "name": "Justin" }
+    --                 ]
+    --             }
+    --          ]
+    --     }
+    Json.Decode.map Array.flatten <|
+        Json.Decode.field "results" <|
+            Json.Decode.array <|
+                Json.Decode.field "resultSet" <|
+                    Json.Decode.array (unwrap decoder)
+
+
+{-| Get a json decoder for a raw ws4sql statement response.
+-}
+ws4sqlStatementResponse : Json.Decode.Decoder (Array Int)
+ws4sqlStatementResponse =
+    -- See https://germ.gitbook.io/ws4sqlite/documentation/responses
+    -- We will get a response that looks like this:
+    --     {
+    --         "results": [
+    --             {
+    --                 "success": true
+    --                 "rowsUpdated": 1
+    --             }
+    --          ]
+    --     }
+    Json.Decode.field "results" <|
+        Json.Decode.array <|
+            Json.Decode.field "rowsUpdated" Json.Decode.int
+
+

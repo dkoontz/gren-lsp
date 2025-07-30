@@ -1,0 +1,926 @@
+module Main exposing (main)
+
+import Bytes
+import Db exposing (Error(..))
+import Db.Decode exposing (Decoder)
+import Db.Encode
+import Expect
+import FileSystem
+import FileSystem.Path as Path exposing (Path)
+import HttpClient
+import Init
+import Node
+import Task exposing (Task)
+import Test.Runner.Effectful exposing 
+    ( Test
+    , await
+    , awaitError
+    , concat
+    , describe
+    , run
+    , test
+    )
+import Time
+
+
+logPath : Path
+logPath =
+    Path.fromPosixString "db/test.log"
+
+
+-- RUNNER
+
+
+main : Node.SimpleProgram a
+main =
+    Node.defineSimpleProgram <| \env ->
+        Init.await HttpClient.initialize <| \httpPerm ->
+        Init.await FileSystem.initialize <| \fsPermission ->
+            let
+                connection =
+                    Db.init httpPerm "http://localhost:12321/test"
+
+                connectionWithAuth =
+                    Db.init httpPerm "http://localhost:12322/test-with-auth"
+
+                seedLog =
+                    FileSystem.writeFile fsPermission
+                        (Bytes.fromString "existing log line\n")
+                        logPath
+            in
+            run env <|
+                await seedLog "Seed log lines" <| \_ ->
+                    concat
+                        [ executeTests connection
+                        , transactionTests connection
+                        , getOneTests connection
+                        , getMaybeOneTests connection
+                        , getAllTests connection
+                        , encodeDecodeTests connection
+                        , getNTests connection
+                        , errorTests connection
+                        , authTests connectionWithAuth
+                        , loggingTests fsPermission connection
+                        , fancyDecodingTests connection
+                        ]
+
+
+-- EXECUTE TESTS
+
+
+executeTests : Db.Connection -> Test
+executeTests connection =
+    let
+        execute =
+            Db.execute connection
+                { statement = "insert into users (id, name) values (1, \"one\")"
+                , parameters = []
+                }
+    in
+    await (reset connection) "Reset DB for execute tests" <| \_ ->
+    await execute "Execute statement" <| \executeResult ->
+        test "returns number of affected rows" <| \_ ->
+            Expect.equal 1 executeResult
+
+
+-- TRANSACTION TESTS
+
+
+transactionTests : Db.Connection -> Test
+transactionTests connection =
+    let
+        insertSuccess = 
+            Db.transaction connection
+                [ { statement = "insert into users (id, name) values (1, \"one\")"
+                  , parameters = []
+                  }
+                , { statement = "insert into users (id, name) values (2, \"two\")"
+                  , parameters = []
+                  }
+                ]
+
+        insertFailure =
+            Db.transaction connection
+                [ { statement = "insert into users (id, name) values (1, \"yo\")"
+                  , parameters = []
+                  }
+                , { statement = "insert into users (nope, wrong) values (1, 2)"
+                  , parameters = []
+                  }
+                ]
+
+        get =
+            Db.getAll connection
+                { query = "select * from users order by id asc"
+                , parameters = []
+                , decoder = userDecoder
+                }
+
+        transactionSuccess =
+            reset connection
+                |> Task.andThen (\_ -> insertSuccess)
+                |> Task.andThen (\_ -> get)
+
+        transactionFailure =
+            reset connection
+                |> Task.andThen (\_ -> insertFailure)
+                |> Task.map (\_ -> [])
+                |> Task.onError (\_ -> get)
+    in
+    describe "Transactions"
+        [ await transactionSuccess "successful transaction" <| \result ->
+            test "commits all statements in the transaction" <| \_ ->
+                [ { id = 1, name = "one" }, { id = 2, name = "two" } ]
+                    |> Expect.equal result
+
+        , await transactionFailure "failed transaction" <| \result ->
+            test "does not commit any statements in the transaction" <| \_ ->
+                Expect.equal [] result
+        ]
+
+
+-- QUERY TESTS
+
+
+getOneTests : Db.Connection -> Test
+getOneTests connection =
+    await (initUsers connection [user1]) "Insert test user for getOne tests" <| \_ ->
+        describe "Db.getOne"
+            [ await (getOneUser connection user1.id) "Get test user" <| \result ->
+                test "returns 1 user" <| \_ ->
+                    Expect.equal user1 result
+
+            , awaitError (getOneUser connection 99) "Get non-existant user" <| \error ->
+                test "returns NoResultError" <| \_ ->
+                    Expect.equal NoResultError error
+
+            , await (initUsers connection [user1, user1]) "Insert duplicate users" <| \_ ->
+                concat
+                    [ awaitError (getOneUser connection 1) "Get one duplicated user" <| \error ->
+                        test "returns MultipleResultsError" <| \_ ->
+                            Expect.equal (MultipleResultsError 2) error
+
+                    , await (getOneUserCustom connection 1 "select * from users limit 1") "Get one with limit" <| \result ->
+                        test "returns one instance of user" <| \_ ->
+                            Expect.equal user1 result
+                    ]
+            ]
+
+
+getMaybeOneTests : Db.Connection -> Test
+getMaybeOneTests connection =
+    await (initUsers connection [user1]) "Insert test user for getMaybeOne tests" <| \_ ->
+        describe "Db.getOne"
+            [ await (getMaybeOneUser connection user1.id) "Maybe get test user" <| \result ->
+                test "returns Just user" <| \_ ->
+                    Expect.equal (Just user1) result
+
+            , await (getMaybeOneUser connection 99) "Maybe get non-existant user" <| \result ->
+                test "returns Nothing" <| \_ ->
+                    Expect.equal Nothing result
+
+            , await (initUsers connection [user1, user1]) "Insert duplicate users" <| \_ ->
+                concat
+                    [ await (getMaybeOneUser connection 1) "Maybe get one duplicated user" <| \result ->
+                        test "returns Nothing" <| \_ ->
+                            Expect.equal Nothing result
+
+                    , await (getMaybeOneUserCustom connection 1 "select * from users limit 1") "Maybe get one with limit" <| \result ->
+                        test "returns one instance of user" <| \_ ->
+                            Expect.equal (Just user1) result
+                    ]
+            ]
+
+
+getAllTests : Db.Connection -> Test
+getAllTests connection =
+    describe "Db.getAll tests"
+        [ await (reset connection) "with no users" <| \_ ->
+          await (getAllUsers connection) "getAll" <| \result ->
+              test "returns empty array" <| \_ ->
+                  Expect.equal [] result
+
+        , await (initUsers connection [user1]) "with one user" <| \_ ->
+          await (getAllUsers connection) "getAll" <| \result ->
+              test "returns array with just the user" <| \_ ->
+                  Expect.equal [user1] result
+
+        , await (initUsers connection [user1, user2]) "with two users" <| \_ ->
+          await (getAllUsers connection) "getAll" <| \result ->
+              test "returns array with both users" <| \_ ->
+                  Expect.equal [user1, user2] result
+        ]
+
+
+-- ERROR TESTS
+
+
+errorTests : Db.Connection -> Test
+errorTests connection =
+    let
+        badSql =
+            { statement = "select blah, from ohno"
+            , parameters = []
+            }
+    in
+    await (initUsers connection [user1, user1]) "Insert duplicate users for error tests" <| \_ ->
+        describe "Db.errorToString"
+            [ awaitError (getOneUser connection 99) "with NoResultError" <| \error ->
+                test "returns no results error string" <| \_ ->
+                    error
+                        |> Db.errorToString
+                        |> Expect.equal "Expected one result, got none"
+
+            , awaitError (getOneUser connection 1) "with MultipleResultsError" <| \error ->
+                test "returns multiple result error string" <| \_ ->
+                    error
+                        |> Db.errorToString
+                        |> Expect.equal "Expected one result, got 2"
+
+            , awaitError (Db.execute connection badSql) "with Error" <| \error ->
+                test "returns error string from database" <| \_ ->
+                    error
+                        |> Db.errorToString
+                        |> (\s -> Expect.equal (String.contains "Internal Server Error" s) True)
+            ]
+
+
+-- ENCODE / DECODE TESTS
+
+
+type alias AllTypes =
+    { nullableInt : Maybe Int
+    , float : Float
+    , string : String
+    , bool : Bool
+    , posix : Time.Posix
+    }
+
+
+allTypesDecoder : Decoder AllTypes
+allTypesDecoder =
+    Db.Decode.get5
+        (Db.Decode.maybe Db.Decode.int "nullableInt")
+        (Db.Decode.float "float")
+        (Db.Decode.string "string")
+        (Db.Decode.bool "bool")
+        (Db.Decode.posix "posix")
+        (\maybeInt float string bool posix -> 
+            { nullableInt = maybeInt
+            , float = float
+            , string = string
+            , bool = bool
+            , posix = posix
+            }
+        )
+
+
+encodeDecodeTests : Db.Connection -> Test
+encodeDecodeTests connection =
+    let
+        insert : AllTypes -> Task Db.Error Int
+        insert record =
+            let
+                nullableIntEncoder =
+                    when record.nullableInt is
+                        Just i ->
+                            Db.Encode.int "nullableInt" i
+                        Nothing ->
+                            Db.Encode.null "nullableInt"
+            in
+            Db.execute connection
+                { statement =
+                   """
+                   insert into allTypes (nullableInt, float, string, bool, posix)
+                   values (:nullableInt, :float, :string, :bool, :posix)
+                   """
+                , parameters =
+                    [ nullableIntEncoder
+                    , Db.Encode.float "float" record.float
+                    , Db.Encode.string "string" record.string
+                    , Db.Encode.bool "bool" record.bool
+                    , Db.Encode.posix "posix" record.posix
+                    ]
+                }
+
+        insertWithStringBools : Task Db.Error Int
+        insertWithStringBools =
+            Db.execute connection
+                { statement =
+                   """
+                   insert into allTypes (nullableInt, float, string, bool, posix) values
+                       (1, 1.0, "", "TRUE", 1),
+                       (2, 2.0, "", "FALSE", 2)
+                   """
+                , parameters = []
+                }
+
+        get : Task Db.Error AllTypes
+        get =
+            Db.getOne connection
+                { parameters = []
+                , decoder = allTypesDecoder
+                , query = "select * from allTypes order by nullableInt asc"
+                }
+
+        getAll_ : Task Db.Error (Array AllTypes)
+        getAll_ =
+            Db.getAll connection
+                { parameters = []
+                , decoder = allTypesDecoder
+                , query = "select * from allTypes"
+                }
+
+        task : AllTypes -> Task Db.Error AllTypes 
+        task record =
+            reset connection
+                |> Task.andThen (\_ -> insert record)
+                |> Task.andThen (\_ -> get)
+
+        allTypes =
+            { nullableInt = Just 1
+            , float = 1.23
+            , string = "abc"
+            , bool = True
+            , posix = Time.millisToPosix 123
+            }
+
+        allTypesWithNegatives =
+            { allTypes 
+                | nullableInt = Nothing 
+                , bool = False
+            }
+    in
+    concat
+        [ await (task allTypes) "insert and get" <| \result ->
+            test "encodes and decodes" <| \_ ->
+                Expect.equal allTypes result
+
+        , await (task allTypesWithNegatives) "insert and get with falsey values" <| \result ->
+            test "encodes and decodes with falsey values" <| \_ ->
+                Expect.equal allTypesWithNegatives result
+        
+        , await (reset connection) "Reset allTypes table" <| \_ ->
+          await insertWithStringBools "Insert TRUE/FALSE rows" <| \_ ->
+          await getAll_ "Get TRUE/FALSE rows" <| \result ->
+            test "successfully decodes TRUE/FALSE as bools" <| \_ ->
+                Expect.equal result
+                    [ { nullableInt = Just 1
+                      , float = 1.0
+                      , string = ""
+                      , bool = True
+                      , posix = Time.millisToPosix 1
+                      }
+                    , { nullableInt = Just 2
+                      , float = 2.0
+                      , string = ""
+                      , bool = False
+                      , posix = Time.millisToPosix 2
+                      }
+                    ]
+        ]
+
+
+-- GETN TESTS
+
+
+getNTests : Db.Connection -> Test
+getNTests connection =
+    let
+        get1 =
+            Db.getOne connection
+                { query = "select 1 as one"
+                , parameters = []
+                , decoder =
+                    Db.Decode.int "one"
+                        |> Db.Decode.map
+                            (\one -> [ one ])
+                }
+
+        get2 =
+            Db.getOne connection
+                { query = "select 1 as one, 2 as two"
+                , parameters = []
+                , decoder =
+                    Db.Decode.get2
+                        (Db.Decode.int "one")
+                        (Db.Decode.int "two")
+                        (\one two -> [ one, two ])
+                }
+
+        get3 =
+            Db.getOne connection
+                { query = "select 1 as one, 2 as two, 3 as three"
+                , parameters = []
+                , decoder =
+                    Db.Decode.get3
+                        (Db.Decode.int "one")
+                        (Db.Decode.int "two")
+                        (Db.Decode.int "three")
+                        (\one two three -> [ one, two, three ])
+                }
+
+        get4 =
+            Db.getOne connection
+                { query = 
+                    """
+                    select
+                        1 as one,
+                        2 as two,
+                        3 as three,
+                        4 as four
+                    """
+                , parameters = []
+                , decoder =
+                    Db.Decode.get4
+                        (Db.Decode.int "one")
+                        (Db.Decode.int "two")
+                        (Db.Decode.int "three")
+                        (Db.Decode.int "four")
+                        (\one two three four -> 
+                            [ one
+                            , two
+                            , three
+                            , four
+                            ]
+                        )
+                }
+
+        get5 =
+            Db.getOne connection
+                { query = 
+                    """
+                    select
+                        1 as one,
+                        2 as two,
+                        3 as three,
+                        4 as four,
+                        5 as five
+                    """
+                , parameters = []
+                , decoder =
+                    Db.Decode.get5
+                        (Db.Decode.int "one")
+                        (Db.Decode.int "two")
+                        (Db.Decode.int "three")
+                        (Db.Decode.int "four")
+                        (Db.Decode.int "five")
+                        (\one two three four five -> 
+                            [ one
+                            , two
+                            , three
+                            , four
+                            , five
+                            ]
+                        )
+                }
+
+        get6 =
+            Db.getOne connection
+                { query = 
+                    """
+                    select
+                        1 as one,
+                        2 as two,
+                        3 as three,
+                        4 as four,
+                        5 as five,
+                        6 as six
+                    """
+                , parameters = []
+                , decoder =
+                    Db.Decode.get6
+                        (Db.Decode.int "one")
+                        (Db.Decode.int "two")
+                        (Db.Decode.int "three")
+                        (Db.Decode.int "four")
+                        (Db.Decode.int "five")
+                        (Db.Decode.int "six")
+                        (\one two three four five six -> 
+                            [ one
+                            , two
+                            , three
+                            , four
+                            , five
+                            , six
+                            ]
+                        )
+                }
+
+        get7 =
+            Db.getOne connection
+                { query = 
+                    """
+                    select
+                        1 as one,
+                        2 as two,
+                        3 as three,
+                        4 as four,
+                        5 as five,
+                        6 as six,
+                        7 as seven
+                    """
+                , parameters = []
+                , decoder =
+                    Db.Decode.get7
+                        (Db.Decode.int "one")
+                        (Db.Decode.int "two")
+                        (Db.Decode.int "three")
+                        (Db.Decode.int "four")
+                        (Db.Decode.int "five")
+                        (Db.Decode.int "six")
+                        (Db.Decode.int "seven")
+                        (\one two three four five six seven -> 
+                            [ one
+                            , two
+                            , three
+                            , four
+                            , five
+                            , six
+                            , seven
+                            ]
+                        )
+                }
+
+        get8 =
+            Db.getOne connection
+                { query = 
+                    """
+                    select
+                        1 as one,
+                        2 as two,
+                        3 as three,
+                        4 as four,
+                        5 as five,
+                        6 as six,
+                        7 as seven,
+                        8 as eight
+                    """
+                , parameters = []
+                , decoder =
+                    Db.Decode.get8
+                        (Db.Decode.int "one")
+                        (Db.Decode.int "two")
+                        (Db.Decode.int "three")
+                        (Db.Decode.int "four")
+                        (Db.Decode.int "five")
+                        (Db.Decode.int "six")
+                        (Db.Decode.int "seven")
+                        (Db.Decode.int "eight")
+                        (\one two three four five six seven eight -> 
+                            [ one
+                            , two
+                            , three
+                            , four
+                            , five
+                            , six
+                            , seven
+                            , eight
+                            ]
+                        )
+                }
+    in
+    describe "getN tests"
+        [ await get1 "get one field" <| \result ->
+            test "get1" <| \_ ->
+                Expect.equal [1] result
+
+        , await get2 "get two fields" <| \result ->
+            test "get2" <| \_ ->
+                Expect.equal [1, 2] result
+
+        , await get3 "get three fields" <| \result ->
+            test "get3" <| \_ ->
+                Expect.equal [1, 2, 3] result
+
+        , await get4 "get four fields" <| \result ->
+            test "get4" <| \_ ->
+                Expect.equal [1, 2, 3, 4] result
+
+        , await get5 "get five fields" <| \result ->
+            test "get5" <| \_ ->
+                Expect.equal [1, 2, 3, 4, 5] result
+
+        , await get6 "get six fields" <| \result ->
+            test "get6" <| \_ ->
+                Expect.equal [1, 2, 3, 4, 5, 6] result
+
+        , await get7 "get seven fields" <| \result ->
+            test "get7" <| \_ ->
+                Expect.equal [1, 2, 3, 4, 5, 6, 7] result
+
+        , await get8 "get eight fields" <| \result ->
+            test "get8" <| \_ ->
+                Expect.equal [1, 2, 3, 4, 5, 6, 7, 8] result
+        ]
+
+
+-- LOGGING TESTS
+
+
+loggingTests : FileSystem.Permission -> Db.Connection -> Test
+loggingTests fsPermission connection =
+    let
+        con =
+            Db.withLogFile fsPermission logPath connection
+
+        execute =
+            Db.execute con
+                { statement = 
+                    """
+                    insert into users (id, name)
+                    values (:id, :name)
+                    """
+                , parameters = 
+                    [ Db.Encode.int "id" 12321
+                    , Db.Encode.string "name" "HOTDOGS"
+                    ]
+                }
+
+        query =
+            Db.getOne con
+                { query = "select 42 as everything"
+                , parameters = []
+                , decoder = 
+                    Db.Decode.int "everything"
+                }
+
+        readLogFile =
+            FileSystem.readFile fsPermission logPath
+                |> Task.map Bytes.toString
+                |> Task.map (Maybe.withDefault "BYTES DECODING FAILED")
+    in
+    await execute "Execute with logging" <| \executeResult ->
+    await query "Query with logging" <| \queryResult ->
+    await readLogFile "Read log file" <| \logContents ->
+        -- let
+        --     _ =
+        --         Debug.log "log" logContents
+        -- in
+        describe "Db connection with logging enabled"
+            [ test "Executes statements normally" <| \_ ->
+                Expect.equal 1 executeResult
+            , test "Executes queries normally" <| \_ ->
+                Expect.equal 42 queryResult
+            , test "Logs requests" <| \_ ->
+                [ String.contains "insert into users" logContents
+                , String.contains "12321" logContents
+                , String.contains "HOTDOGS" logContents
+                , String.contains "select 42 as everything" logContents
+                ]
+                    |> Expect.equalArrays
+                        [ True
+                        , True
+                        , True
+                        , True
+                        ]
+            , test "Does not overwrite existing log lines" <| \_ ->
+                String.contains "existing log line" logContents
+                    |> Expect.equal True
+            ]
+
+
+-- AUTH TESTS
+
+
+authTests : Db.Connection -> Test
+authTests connection =
+    let
+        execute =
+            Db.execute connection
+                { statement = "select 1"
+                , parameters = []
+                }
+
+        connectionWithAuth =
+            connection
+                |> Db.withAuth
+                    -- see Justfile
+                    { user = "myuser"
+                    , password = "mypass"
+                    }
+
+        executeWithAuth =
+            Db.execute connectionWithAuth
+                { statement = "select 1"
+                , parameters = []
+                }
+    in
+    describe "Auth tests"
+        [ awaitError execute "Execute statement when auth is required" <| \result ->
+            test "results in authentication error" <| \_ ->
+                when result is
+                    Error _ ->
+                        Expect.pass
+
+                    _ ->
+                        Expect.fail <|
+                            "Did not fail with expected error variant: " ++
+                            Debug.toString result
+        
+        , await executeWithAuth "Execute statement with auth" <| \result ->
+            test "succeeds without authentication error" <| \_ ->
+                Expect.equal 0 result
+        ]
+
+
+-- FANCY DECODING
+
+
+type alias OneTwo =
+    { one : String
+    , two : String
+    }
+
+
+fancyDecoder : Decoder OneTwo
+fancyDecoder =
+    Db.Decode.get2
+        (Db.Decode.int "one" |> Db.Decode.map String.fromInt |> Db.Decode.andThen (\i -> Db.Decode.succeed ("one: " ++ i)))
+        (Db.Decode.int "two")
+        (\one two -> { one = one, two = two })
+            |> Db.Decode.map
+                (\{ one, two } ->
+                    { one = one
+                    , two = String.fromInt two
+                    }
+                )
+            |> Db.Decode.andThen
+                (\{ one, two } ->
+                    Db.Decode.succeed
+                        { one = one
+                        , two = "two: " ++ two
+                        }
+                )
+
+
+fancyQuery : Db.Connection -> Task Db.Error OneTwo
+fancyQuery connection =
+    Db.getOne connection
+        { query = "select 1 as one, 2 as two"
+        , parameters = []
+        , decoder = fancyDecoder
+        }
+
+
+failDecoding : Db.Connection -> Task Db.Error Int
+failDecoding connection =
+    Db.getOne connection
+        { query = "select 1"
+        , parameters = []
+        , decoder = Db.Decode.fail "Oopsy!"
+        }
+
+
+fancyDecodingTests : Db.Connection -> Test
+fancyDecodingTests connection =
+    describe "Fancy decoder tests"
+        [ await (fancyQuery connection) "Run query with fancy decoder" <| \result ->
+            test "decodes fancy result" <| \_ ->
+                Expect.equal
+                    { one = "one: 1", two = "two: 2" }
+                    result
+        
+        , awaitError (failDecoding connection) "Forcing a decode failure" <| \result ->
+            test "results in decoding error" <| \_ ->
+                when result is
+                    Error s ->
+                        String.contains "Oopsy!" s
+                            |> Expect.equal True
+
+                    _ ->
+                        Expect.fail <|
+                            "Unexpected error in forced decoder failure test: " ++
+                            Debug.toString result
+        ]
+
+
+-- USERS
+
+
+type alias User =
+    { id : Int
+    , name : String
+    }
+
+
+userDecoder : Decoder User
+userDecoder =
+    Db.Decode.get2
+        (Db.Decode.int "id")
+        (Db.Decode.string "name")
+        (\id name -> { id = id, name = name })
+
+
+user1 : User
+user1 =
+    { id = 1, name = "one" }
+
+
+user2 : User
+user2 =
+    { id = 2, name = "two" }
+
+
+insertUsers : Db.Connection -> Array User -> Task Db.Error (Array Int)
+insertUsers connection users =
+    users
+        |> Array.map
+            (\{id, name} ->
+                { statement = "insert into users (id, name) values (:id, :name)"
+                , parameters =
+                    [ Db.Encode.int "id" id
+                    , Db.Encode.string "name" name
+                    ]
+                }
+            )
+        |> Db.transaction connection
+
+
+initUsers : Db.Connection -> Array User -> Task Db.Error (Array Int)
+initUsers connection users =
+    reset connection
+        |> Task.andThen (\_ -> insertUsers connection users)
+
+
+getOneUser : Db.Connection -> Int -> Task Db.Error User
+getOneUser connection id =
+    Db.getOne connection
+        { query = "select * from users where id = :id"
+        , parameters = [ Db.Encode.int "id" id ]
+        , decoder = userDecoder
+        }
+
+
+getMaybeOneUser : Db.Connection -> Int -> Task Db.Error (Maybe User)
+getMaybeOneUser connection id =
+    Db.getMaybeOne connection
+        { query = "select * from users where id = :id"
+        , parameters = [ Db.Encode.int "id" id ]
+        , decoder = userDecoder
+        }
+
+
+getOneUserCustom : Db.Connection -> Int -> String -> Task Db.Error User
+getOneUserCustom connection id query =
+    Db.getOne connection
+        { query = query
+        , parameters = [ Db.Encode.int "id" id ]
+        , decoder = userDecoder
+        }
+
+
+getMaybeOneUserCustom : Db.Connection -> Int -> String -> Task Db.Error (Maybe User)
+getMaybeOneUserCustom connection id query =
+    Db.getMaybeOne connection
+        { query = query
+        , parameters = [ Db.Encode.int "id" id ]
+        , decoder = userDecoder
+        }
+
+
+getAllUsers : Db.Connection -> Task Db.Error (Array User)
+getAllUsers connection =
+    Db.getAll connection
+        { query = "select * from users order by id"
+        , parameters = []
+        , decoder = userDecoder
+        }
+
+
+-- HELPERS
+
+
+reset : Db.Connection -> Task Db.Error (Array Int)
+reset connection =
+    Db.transaction connection
+        [ { parameters = []
+          , statement =
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER,
+                name TEXT NOT NULL
+            )
+            """
+          }
+        , { parameters = []
+          , statement =
+            """
+            CREATE TABLE IF NOT EXISTS allTypes (
+                nullableInt INTEGER,
+                float REAL NOT NULL,
+                string TEXT NOT NULL,
+                bool INTEGER,
+                posix INTEGER
+            )
+            """
+          }
+        , { parameters = []
+          , statement = "DELETE FROM users"
+          }
+        , { parameters = []
+          , statement = "DELETE FROM allTypes"
+          }
+        ]
+
+

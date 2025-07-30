@@ -1,0 +1,11 @@
+module Dedris.Motion exposing ( Motion (..) )
+
+
+-- Bewegung
+type Motion
+    = None
+    | MoveDown
+    | MoveLeft
+    | MoveRightly
+    | RotateLeft
+    | RotateRight

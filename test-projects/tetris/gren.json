@@ -1,0 +1,19 @@
+{ "type" : "application"
+, "platform" : "browser"
+, "source-directories" :
+    [ "src"
+    ]
+, "gren-version" : "0.4.4"
+, "dependencies" :
+    { "direct" :
+        { "aramiscd/gren-ari" : "1.1.0"
+        , "aramiscd/gren-keyboard-event" : "1.0.0"
+        , "gren-lang/browser" : "4.0.0"
+        , "gren-lang/core" : "5.0.2"
+        }
+    , "indirect" :
+        { "aramiscd/gren-proper-keyboard" : "2.0.0"
+        , "gren-lang/url" : "4.0.0"
+        }
+    }
+}

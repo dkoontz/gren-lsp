@@ -1,0 +1,483 @@
+module Db exposing
+
+    -- Initialization
+    ( Connection
+    , init
+    , withAuth
+    , withLogFile
+    -- After we have a way to open write stream
+    -- without overwriting existing file contents:
+    --, withLogStream
+
+    -- Queries
+    , Query
+    , Statement
+    , getOne
+    , getMaybeOne
+    , getAll
+    , transaction
+    , execute
+
+    -- Errors
+    , Error(..)
+    , errorToString
+    )
+
+{-| Run db queries in Gren.
+
+## Initialization
+
+@docs Connection, init, withAuth, withLogFile
+
+## Queries
+
+@docs Query, Statement, getOne, getMaybeOne, getAll, execute, transaction
+
+## Errors
+
+@docs Error, errorToString
+
+-}
+
+import Bytes exposing (Bytes)
+import Db.Encode
+import Db.Decode
+import FileSystem
+import FileSystem.Path exposing (Path)
+import HttpClient exposing (Error(..), Response)
+import Json.Encode
+import Json.Decode
+import Stream
+import Task exposing (Task)
+import Time exposing (Month(..))
+
+
+-- INITIALIZATION
+
+
+{-| Connection to a ws4sql server.
+-}
+type Connection =
+    Connection
+        { credentials : Maybe { user : String, password : String }
+        , url : String
+        , httpPerm : HttpClient.Permission
+        , logFile : Maybe { permission : FileSystem.Permission, path : Path }
+        }
+
+
+{-| Connect to a ws4sql server.
+
+ws4sql uses HTTP as its protocol so you must grant permission with
+[HttpClient.Permission](https://packages.gren-lang.org/package/gren-lang/node/version/latest/module/HttpClient#Permission)
+
+The String is the server url and by default is
+`http://localhost:12321/[dbname]` where `[dbname]` is the database name
+configured for your server, without the suffix. So for example, if you started
+a server with `ws4sql --quick-db mydb.db`, the url will be
+`http://localhost:12321/mydb`.
+-}
+init : HttpClient.Permission -> String -> Connection
+init httpPerm url =
+    Connection
+        { credentials = Nothing
+        , logFile = Nothing
+        , httpPerm = httpPerm
+        , url = url
+        }
+
+
+{-| Update a connection to use [authentication](https://germ.gitbook.io/ws4sqlite/security#authentication).
+
+    Db.init httpPerm "http://localhost:12321"
+        |> Db.withAuth { user = "myuser", password = "mypass" }
+-}
+withAuth : { user : String, password : String } -> Connection -> Connection
+withAuth creds (Connection config) =
+    Connection
+        { config
+            | credentials = Just creds
+        }
+
+
+{-| Update a connection to log requests.
+
+    Db.init httpPerm "http://localhost:12321"
+        |> Db.LogFile (FileSystem.Path.fromPosixString "myLog.json")
+
+Each sql request to ws4sql will be appended to the file as a line of json.
+-}
+withLogFile : FileSystem.Permission -> Path -> Connection -> Connection
+withLogFile fsPerm path (Connection config) =
+    Connection
+        { config
+            | logFile = 
+                Just
+                    { permission = fsPerm
+                    , path = path
+                    }
+        }
+
+
+-- QUERIES
+
+
+{-| A query for pulling one or more values from a database.
+
+This is the record used for the `get*` functions below.
+
+The query string can contain parameters prefixed with a colon.
+For example: `"select * from user where id = :id"`.
+They will be replaced with [Encoder](Db.Encode) values in the `parameters` array.
+
+_You should always use parameter encoding instead of direct string manipulation to avoid sql injection attacks._
+
+The resulting data will be turned into a Gren value (or array of values) using the [Decoder](Db.Decode) in the `decoder` field.
+-}
+type alias Query a =
+    { query : String
+    , parameters : Array Db.Encode.Value
+    , decoder : Db.Decode.Decoder a
+    }
+
+
+{-| A statement for executing sql that does not return any values.
+
+Just like queries, the statement can contain parameters prefixed with a colon.
+For example: `"insert into user (id, name) values (:id, :name)"`.
+They will be replaced with [Encoder](Db.Encode) values in the `parameters` array.
+
+_You should always use parameter encoding instead of direct string manipulation to avoid sql injection attacks._
+-}
+type alias Statement =
+    { statement : String
+    , parameters : Array Db.Encode.Value
+    }
+
+
+{-| Run a query that should return exactly one result.
+
+Queries with zero or more than one result will result in an error.
+
+    Db.getOne connection
+        { query = "select * from users where id = :id"
+        , parameters = [ Db.Encode.int "id" 1 ]
+        , decoder = 
+            Db.Decode.get2
+                (Db.Decode.int "id")
+                (Db.Decode.string "name")
+                (\id name -> { id = id, name = name })
+        }
+-}
+getOne : Connection -> Query a -> Task Error a
+getOne connection query =
+    getAll connection query
+        |> Task.andThen toSingleResultTask
+
+
+{-| Run a query that should have zero or one result.
+
+The resolved value will be a `Maybe` holding `Nothing` or the result of the `decoder`.
+    
+    Db.getMaybeOne connection
+        { query = "select * from users where id = :id"
+        , parameters = [ Db.Encode.int "id" 1 ]
+        , decoder = 
+            Db.Decode.get2
+                (Db.Decode.int "id")
+                (Db.Decode.string "name")
+                (\id name -> { id = id, name = name })
+        }
+-}
+getMaybeOne : Connection -> Query a -> Task Error (Maybe a)
+getMaybeOne connection query =
+    getAll connection query
+        |> Task.andThen toMaybeSingleResultTask
+
+
+{-| Run a query that should have zero or more results.
+
+The resolved value will be an array of values, each derived from the `decoder`.
+    
+    Db.getAll connection
+        { query = "select * from users"
+        , parameters = []
+        , decoder = 
+            Db.Decode.get2
+                (Db.Decode.int "id")
+                (Db.Decode.string "name")
+                (\id name -> { id = id, name = name })
+        }
+-}
+getAll : Connection -> Query a -> Task Error (Array a)
+getAll (Connection { credentials, url, httpPerm, logFile }) { query, parameters, decoder } =
+    let
+        json =
+            [ [ { key = "query"
+                , value = Json.Encode.string query
+                }
+              , { key = "values"
+                , value = Db.Encode.toJson parameters
+                }
+              ]
+            ]
+                |> toRequestJson credentials
+
+        decodeResponse =
+            Db.Decode.ws4sqlQueryResponse decoder
+        in
+        tryLog { logFile = logFile, url = url, json = json }
+            |> Task.andThen
+                (\_ ->
+                    HttpClient.post url
+                        |> HttpClient.withJsonBody json
+                        |> HttpClient.expectJson decodeResponse
+                        |> HttpClient.send httpPerm
+                )
+            |> Task.mapError mapHttpError
+            |> Task.map .data
+
+
+{-| Execute arbitrary sql.
+
+The resulting Int represents the number of affected rows.
+
+    Db.execute connection
+        { statement = "insert into users (id, name) values (:id, :name)"
+        , parameters =
+            [ Db.Encode.int "id" 1
+            , Db.Encode.string "name" "Justin"
+            ]
+        }
+-}
+execute : Connection -> Statement -> Task Error Int
+execute connection statement =
+    transaction connection [ statement ]
+        |> Task.andThen toSingleResultTask
+
+
+{-| Execute an array of sql statements in a single transaction.
+
+The resulting array of Ints represents the number of affected rows in each statement.
+
+    Db.transaction connection
+        [ { statement = "insert into users (id, name) values (1, \"one\")"
+          , parameters = []
+          }
+        , { statement = "insert into users (id, name) values (2, \"two\")"
+          , parameters = []
+          }
+        ]
+-}
+transaction : Connection -> Array Statement -> Task Error (Array Int)
+transaction (Connection { credentials, url, httpPerm, logFile }) statements =
+    let
+        json =
+            statements
+                |> Array.map
+                    (\{ statement, parameters } ->
+                        [ { key = "statement"
+                          , value = Json.Encode.string statement
+                          }
+                        , { key = "values"
+                          , value = Db.Encode.toJson parameters
+                          }
+                        ]
+                    )
+                |> toRequestJson credentials
+    in
+    tryLog { logFile = logFile, url = url, json = json }
+        |> Task.andThen (\_ ->
+            HttpClient.post url
+                |> HttpClient.withJsonBody json
+                |> HttpClient.expectJson Db.Decode.ws4sqlStatementResponse
+                |> HttpClient.send httpPerm
+            )
+        |> Task.mapError mapHttpError
+        |> Task.map .data
+
+
+-- HELPERS
+
+
+tryLog : 
+    { logFile : Maybe { permission : FileSystem.Permission, path : Path }
+    , url : String
+    , json : Json.Encode.Value
+    } ->
+    Task x {}
+tryLog { logFile, url, json } =
+    when logFile is
+        Just { permission, path } ->
+            Time.now
+                |> Task.map toIsoString
+                |> Task.andThen
+                    (\time ->
+                        "{\"time\":\"" ++ time ++ "\","
+                            |> String.append ("\"url\":\"" ++ url ++ "\",")
+                            |> String.append "\"request\":"
+                            |> String.append (Json.Encode.encode 0 json)
+                            |> String.append "}\n"
+                            |> Bytes.fromString
+                            |> Task.succeed
+                    )
+                |> Task.andThen 
+                    (\line -> 
+                        FileSystem.appendToFile permission line path
+                    )
+                |> Task.map (\_ -> {})
+                |> Task.onError (\_ -> Task.succeed {})
+
+        Nothing ->
+            Task.succeed {}
+
+
+toIsoString : Time.Posix -> String
+toIsoString time =
+    let
+        year =
+            Time.toYear Time.utc time
+                |> String.fromInt
+
+        month =
+            when (Time.toMonth Time.utc time) is
+                Jan -> "01"
+                Feb -> "02"
+                Mar -> "03"
+                Apr -> "04"
+                May -> "05"
+                Jun -> "06"
+                Jul -> "07"
+                Aug -> "08"
+                Sep -> "09"
+                Oct -> "10"
+                Nov -> "11"
+                Dec -> "12"
+
+        day =
+            Time.toDay Time.utc time
+                |> String.fromInt
+                |> String.padLeft 2 '0'
+
+        hour =
+            Time.toHour Time.utc time
+                |> String.fromInt
+                |> String.padLeft 2 '0'
+
+        minute =
+            Time.toMinute Time.utc time
+                |> String.fromInt
+                |> String.padLeft 2 '0'
+
+        second =
+            Time.toSecond Time.utc time
+                |> String.fromInt
+                |> String.padLeft 2 '0'
+    in
+    -- YYYY-MM-DDTHH:MM:SSZ
+    year ++ "-" ++ month ++ "-" ++ day ++ "T" ++
+    hour ++ ":" ++ minute ++ ":" ++ second ++ "Z"
+
+
+toSingleResultTask : Array a -> Task Error a
+toSingleResultTask rows =
+    when rows is
+        [ a ] ->
+            Task.succeed a
+
+        [] ->
+            Task.fail NoResultError
+
+        _ ->
+            Task.fail <|
+                MultipleResultsError <|
+                    Array.length rows
+
+
+toMaybeSingleResultTask : Array a -> Task Error (Maybe a)
+toMaybeSingleResultTask rows =
+    when rows is
+        [ a ] ->
+            Task.succeed (Just a)
+
+        _ ->
+            Task.succeed Nothing
+
+
+toRequestJson :
+    Maybe { user : String, password : String } ->
+    Array (Array { key : String, value : Json.Encode.Value }) ->
+    Json.Encode.Value
+toRequestJson credentials queries =
+    -- See https://germ.gitbook.io/ws4sqlite/documentation/requests
+    -- We want a request that looks like this:
+    --     { 
+    --         "transaction": [
+    --             {
+    --                 "query": "select * from User where id = ?",
+    --                 "values": [ userId ]
+    --             }
+    --         ]
+    --     }
+    [ { key = "transaction"
+      , value = Json.Encode.array Json.Encode.object queries
+      }
+    ]
+        |> withCreds credentials
+        |> Json.Encode.object
+
+
+withCreds : 
+    Maybe { user : String, password : String } ->
+    Array { key : String, value : Json.Encode.Value } -> 
+    Array { key : String, value : Json.Encode.Value }
+withCreds credentials =
+    Array.append <|
+        when credentials is
+            Just { user, password } ->
+                [ { key = "credentials"
+                  , value =
+                    Json.Encode.object
+                        [ { key = "user", value = Json.Encode.string user }
+                        , { key = "password", value = Json.Encode.string password }
+                        ]
+                  }
+                ]
+
+            Nothing ->
+                []
+
+
+
+-- ERRORS
+
+
+{-|-}
+type Error
+    = Error String
+    | NoResultError
+    | MultipleResultsError Int
+
+
+mapHttpError : HttpClient.Error a -> Error
+mapHttpError =
+    -- When https://github.com/gren-lang/node/issues/28 is fixed, improve this
+    -- by matching on BadStatus to parse the "error" from the response body.
+    -- See https://germ.gitbook.io/ws4sqlite/documentation/errors
+    HttpClient.errorToString >> Error
+
+
+{-| Get an error message as a string.
+-}
+errorToString : Error -> String
+errorToString error =
+    when error is
+        Error s ->
+            s
+
+        NoResultError ->
+            "Expected one result, got none"
+
+        MultipleResultsError n ->
+            "Expected one result, got " ++ (String.fromInt n) 
+
