@@ -1,0 +1,24 @@
+module SyntaxError exposing (main)
+
+import Node
+
+
+main : Node.Program {} {}
+main =
+    Node.defineProgram
+        { init = \_ -> ( {}, Node.none )
+        , update = \_ model -> ( model, Node.none )
+        , subscriptions = \_ -> Sub.none
+        }
+
+
+-- This function has a syntax error (missing =)
+brokenFunction : String -> String
+brokenFunction name 
+    "Hello, " ++ name ++ "!"
+
+
+-- This function has correct syntax
+workingFunction : String -> String
+workingFunction name =
+    "Goodbye, " ++ name ++ "!"

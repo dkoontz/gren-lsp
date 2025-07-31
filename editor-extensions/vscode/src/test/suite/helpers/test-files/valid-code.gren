@@ -1,0 +1,67 @@
+module ValidCode exposing (main, greet, add, Model, Msg(..))
+
+import Node
+
+
+-- TYPES
+
+type alias Model =
+    { count : Int
+    , message : String
+    }
+
+
+type Msg 
+    = Increment
+    | Decrement
+    | SetMessage String
+
+
+-- MAIN
+
+main : Node.Program {} {}
+main =
+    Node.defineProgram
+        { init = \_ -> ( initialModel, Node.none )
+        , update = \_ model -> ( model, Node.none )
+        , subscriptions = \_ -> Sub.none
+        }
+
+
+-- MODEL
+
+initialModel : Model
+initialModel =
+    { count = 0
+    , message = "Hello, World!"
+    }
+
+
+-- FUNCTIONS
+
+greet : String -> String
+greet name =
+    "Hello, " ++ name ++ "!"
+
+
+add : Int -> Int -> Int
+add x y =
+    x + y
+
+
+multiply : Int -> Int -> Int
+multiply x y =
+    x * y
+
+
+processModel : Msg -> Model -> Model
+processModel msg model =
+    case msg of
+        Increment ->
+            { model | count = model.count + 1 }
+        
+        Decrement ->
+            { model | count = model.count - 1 }
+        
+        SetMessage newMessage ->
+            { model | message = newMessage }

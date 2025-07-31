@@ -1,0 +1,26 @@
+module ImportError exposing (main)
+
+import Node
+import NonExistentModule  -- This import should cause an error
+import Html exposing (nonExistentFunction)  -- This should also cause an error
+
+
+main : Node.Program {} {}
+main =
+    Node.defineProgram
+        { init = \_ -> ( {}, Node.none )
+        , update = \_ model -> ( model, Node.none )
+        , subscriptions = \_ -> Sub.none
+        }
+
+
+-- Using non-existent import
+useNonExistent : String
+useNonExistent =
+    NonExistentModule.someFunction "test"
+
+
+-- Using non-existent function from valid module
+useBadFunction : String
+useBadFunction =
+    nonExistentFunction "test"

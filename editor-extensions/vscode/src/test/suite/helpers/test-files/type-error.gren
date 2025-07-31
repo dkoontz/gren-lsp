@@ -1,0 +1,30 @@
+module TypeError exposing (main)
+
+import Node
+
+
+main : Node.Program {} {}
+main =
+    Node.defineProgram
+        { init = \_ -> ( {}, Node.none )
+        , update = \_ model -> ( model, Node.none )
+        , subscriptions = \_ -> Sub.none
+        }
+
+
+-- This function has a type error (trying to add string and number)
+addNumbers : Int -> Int -> Int
+addNumbers x y =
+    x + "not a number"
+
+
+-- This function has correct types
+addCorrectly : Int -> Int -> Int
+addCorrectly x y =
+    x + y
+
+
+-- This function has a type mismatch in the signature
+wrongSignature : String -> String
+wrongSignature x =
+    x + 1  -- Should be String -> Int

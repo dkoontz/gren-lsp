@@ -1,0 +1,22 @@
+module Main exposing (main)
+
+import Node
+
+
+main : Node.Program {} {}
+main =
+    Node.defineProgram
+        { init = \_ -> ( {}, Node.none )
+        , update = \_ model -> ( model, Node.none )
+        , subscriptions = \_ -> Sub.none
+        }
+
+
+sayHello : String -> String
+sayHello name =
+    "Hello, " ++ name ++ "!"
+
+
+greet : String
+greet =
+    sayHello "World"

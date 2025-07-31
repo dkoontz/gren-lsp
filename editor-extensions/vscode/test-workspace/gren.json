@@ -1,0 +1,17 @@
+{
+  "type": "application",
+  "platform": "node",
+  "elm-version": "0.19.1",
+  "source-directories": ["."],
+  "dependencies": {
+    "direct": {
+      "gren-lang/core": "6.0.0",
+      "gren-lang/node": "6.0.0"
+    },
+    "indirect": {}
+  },
+  "test-dependencies": {
+    "direct": {},
+    "indirect": {}
+  }
+}

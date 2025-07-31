@@ -1,37 +1,35 @@
-## Enhance VS Code extension to show actionable compiler errors as popup notifications
-For some errors it would be really useful to show the user a popup instead of just a red squiggle line. This is a compiler error that is not currently detected. I want to make sure:
+Now we need to look at the way the tests are being carried out. Look at ./editor-extensions/vscode/src/test/suite/lsp-protocol.test.ts. The tests in this file are not actually asserting anything about the LSP although that is what they state they are doing. Let's go one by one:
 
-- This error is detected and not ignored
-- There is a notification shown to the user informing them that there is compiler version mismatch with their project. It should direct them to either change compiler versions (give npm command to do this) or to change their `gren.json` compiler version.
-- 
-```
-2025-07-30T18:40:12.047169Z  INFO gren_lsp_core::compiler: Compiler stderr: {"type":"error","path":"gren.json","title":"GREN VERSION MISMATCH","message":["Your gren.json says this application needs a different version of Gren.\n\nIt requires ",{"bold":false,"underline":false,"color":"GREEN","string":"0.4.4"},", but you are using ",{"bold":false,"underline":false,"color":"RED","string":"0.5.3"}," right now."]}
-2025-07-30T18:40:12.047204Z  WARN gren_lsp_core::compiler: Unknown compiler output format, ignoring
-2025-07-30T18:40:12.047209Z  INFO gren_lsp_core::compiler: 📋 Found 0 compiler diagnostics
-```
+- should send textDocument/didOpen when opening Gren file
+What it does: this test opens a test file, gets the extension, but then simply checks if some text is in the file
+What it should do: after getting the extension, the test should validate that it is was loaded correctly and is active (no errors starting u)
 
-For testing, the Tetris app had `"gren-version" : "0.4.4"`
+- should send textDocument/didChange when editing Gren file
+What it does: this test inserts a block of text into an existing document, then checks if the file contains the new text
+What it should do: after inserting the new contents, it should validate that the LSP was sent an event and then responded with the correct data (probably saying there were no diagnostics since the file doesn't have any errors). Also the delay time on LSP processing can be much lower, 1000ms should be plenty
 
-## Compilation finds different version of Gren compiler
-If I run `gren --version` from my terminal I get `0.5.4`. In the LSP server logs I am seeing this error message:
+- should handle hover requests on symbols
+What it does: sets the cursor at a specific location and triggers the hover action in VS Code, then it doesn't assert anything
+What it should do: after triggering the hover it should wait for a short delay (1000ms) and then assert that the LSP received the request and responded with the expected data for the symbol
 
-```
-2025-07-30T18:54:48.183097Z  INFO gren_lsp_core::compiler: Compiler stderr: {"type":"error","path":"gren.json","title":"GREN VERSION MISMATCH","message":["Your gren.json says this application needs a different version of Gren.\n\nIt requires ",{"bold":false,"underline":false,"color":"GREEN","string":"0.5.4"},", but you are using ",{"bold":false,"underline":false,"color":"RED","string":"0.5.3"}," right now."]}
-```
+- should handle go-to-definition requests
+What it does: set the cursor at a symbol and triggers the go-to-definition action, then it doesn't assert anything
+What is should do: after triggering the go-to-definition action, delay slightly, then assert the cursor has moved to the correct position in the document
 
-Is the LSP server somehow using a different version of the Gren compiler than the one I have on my path?
 
+## More tests that allow bad states
+I am continuing to see test cases that excuse failure states. For example: `Extension is not active - may affect protocol tests`. If the extension is not active, and these are tests to validate the extension, then WHAT ARE WE EVEN TESTING? We absolutely must get rid of any cases like this. If the test is to validate the extension is loaded, then anything other than the extension being loaded is a failure.
 
 ## Change logging levels for VS Code extension
 
-There is a lot of info currently being logged in the VS Code extension. This info is really valuable when debugging but overwhelming when just checking to see if something is happening. I want to move the log level of several events from info to debug. 
+There is a lot of info currently being logged in the VS Code extension. This info is really valuable when debugging but overwhelming when just checking to see if something is happening. I want to move the log level of several events from info to debug.
 
 This message is great at INFO, it informs the user that a top-level event (looking up a symbol) is happening.
 
 
 `2025-07-30T18:48:30.097254Z  INFO gren_lsp_protocol::handlers: Searching for 'Tetromino' in module 'Dedris'`
 
-The next few messages are more suited to debugging and therefore should be at the DEBUG log level. 
+The next few messages are more suited to debugging and therefore should be at the DEBUG log level.
 
 ```
 2025-07-30T18:48:30.097531Z  INFO gren_lsp_protocol::handlers: 🔍 Checking if symbol 'Tetromino' in file '/Users/david/dev/gren-lsp-test-projects/tetris/src/Dedris/Tetromino.gren' matches module path 'Dedris'
@@ -46,23 +44,5 @@ The next few messages are more suited to debugging and therefore should be at th
 2025-07-30T18:48:30.097618Z  INFO gren_lsp_protocol::handlers: No hover content generated for 'Tetromino'
 ```
 
-## Module import has broken some type lookup (might be fixed by compiler version issue)
-After implementing story 3.5 some of the type lookups are failing. Given this code, when I hover over the `Tetromino` on the line `initL : Tetromino` I see this in the logs.
-
-```gren
-init : {} -> { model : Model , command : Cmd Msg }
-init {} =
-    { model = Model.init
-    , command =
-        Cmd.batch
-            -- todo: Warum geht das nicht richtig mit nur einem Aufruf?
-            [ Cmd.generateNewTetromino
-            , Cmd.generateNewTetromino
-            , Cmd.getViewport
-            ]
-    }
-
-initL : Tetromino
-initL =
-    Dedris.Tetromino.l
-```
+## VS Code extension doesn't set environment variable
+The GREN_COMPILER_PATH is not being set by the VS Code extension causing the LSP server to fail. The extension should only start the server after downloading a Gren compiler and then must set the environment variable.

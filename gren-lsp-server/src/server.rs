@@ -209,10 +209,16 @@ impl LanguageServer for GrenLanguageServer {
 
         info!("Workspace stats: {} documents open", stats.document_count);
 
-        // Publish diagnostics
-        self.client
-            .publish_diagnostics(uri, diagnostics, None)
-            .await;
+        // Publish diagnostics with timeout to prevent hanging
+        let publish_result = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            self.client.publish_diagnostics(uri.clone(), diagnostics, None)
+        ).await;
+        
+        match publish_result {
+            Ok(_) => {},
+            Err(_) => error!("❌ Timeout publishing diagnostics for: {}", uri),
+        }
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {

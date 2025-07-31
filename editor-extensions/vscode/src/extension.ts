@@ -19,14 +19,21 @@ let outputChannel: OutputChannel;
 let compilerManager: GrenCompilerManager;
 
 export function activate(context: ExtensionContext) {
+  console.log("Gren LSP Extension: Starting activation...");
+  
   // Create output channel for extension logs (LSP client will create server channel automatically)
   outputChannel = window.createOutputChannel("Gren LSP Extension");
   
   outputChannel.appendLine("Gren LSP Extension starting...");
   outputChannel.appendLine("📺 Created Extension output channel (LSP client will create Server channel)");
+  outputChannel.show(true); // Make sure the output channel is visible
+  
+  console.log("Gren LSP Extension: Output channel created");
   
   // Initialize compiler manager
   compilerManager = new GrenCompilerManager(context, outputChannel);
+  
+  console.log("Gren LSP Extension: Compiler manager created");
   
   // Register commands
   context.subscriptions.push(
@@ -157,134 +164,161 @@ export function activate(context: ExtensionContext) {
     }
   }
   
-  // Initialize compiler path resolution in background (don't block activation)
-  let grenCompilerPath: string | null = null;
+  // Initialize and start LSP server after resolving compiler
+  outputChannel.appendLine(`🔍 Resolving Gren compiler before starting LSP server...`);
+  console.log("Gren LSP Extension: Starting compiler resolution...");
   
-  // Start compiler resolution in background
-  compilerManager.getCompilerPath().then((path) => {
-    grenCompilerPath = path;
-    if (path) {
-      outputChannel.appendLine(`✅ Gren compiler found: ${path}`);
-    } else {
-      outputChannel.appendLine(`❌ No Gren compiler found - LSP will use PATH fallback`);
-    }
-  }).catch((error) => {
-    outputChannel.appendLine(`⚠️ Error resolving compiler path: ${error}`);
-  });
-
-  // Configure server executable
-  const traceLevel = config.get<string>('trace.server', 'off');
-  const rustLogLevel = traceLevel === 'verbose' ? 'gren_lsp=debug' : 'gren_lsp=info';
-  outputChannel.appendLine(`🔧 Server args: ${parseTreeArgs.join(' ')}`);
-  outputChannel.appendLine(`📊 RUST_LOG level: ${rustLogLevel}`);
-  
-  const serverExecutable: Executable = {
-    command: serverPath,
-    args: parseTreeArgs,
-    options: {
-      env: {
-        ...process.env,
-        RUST_LOG: rustLogLevel,
-        // Pass the compiler path to the LSP server via environment variable
-        GREN_COMPILER_PATH: grenCompilerPath || ''
-      }
-    }
-  };
-
-  const serverOptions: ServerOptions = serverExecutable;
-
-  // Options to control the language client
-  const clientOptions: LanguageClientOptions = {
-    // Register the server for Gren documents
-    documentSelector: [{ scheme: "file", language: "gren" }],
-    synchronize: {
-      // Notify the server about file changes to Gren files
-      fileEvents: workspace.createFileSystemWatcher("**/*.gren"),
-    },
-    outputChannelName: "Gren LSP Server",
-    // Enable trusted markdown for clickable links in hover content
-    markdown: {
-      isTrusted: true,
-    }
-  };
-  
-  outputChannel.appendLine(`📋 Client options configured:`);
-  outputChannel.appendLine(`  - Document selector: file:gren`);
-  outputChannel.appendLine(`  - File watcher: **/*.gren`);
-  outputChannel.appendLine(`  - Output channel: ${clientOptions.outputChannelName}`);
-
-  // Create the language client and start the client.
-  outputChannel.appendLine(`🚀 Creating LSP client...`);
-  client = new LanguageClient(
-    "gren-lsp",
-    "Gren Language Server",
-    serverOptions,
-    clientOptions
-  );
-
-  // Enable LSP protocol tracing if verbose mode is on
-  if (traceLevel === 'verbose') {
-    outputChannel.appendLine(`🔍 Enabling verbose LSP protocol tracing...`);
-    client.setTrace(Trace.Verbose);
-  }
-  
-  // Add state change monitoring to track connection lifecycle
-  client.onDidChangeState((stateChangeEvent) => {
-    const oldState = stateChangeEvent.oldState === State.Stopped ? "Stopped" :
-                     stateChangeEvent.oldState === State.Starting ? "Starting" : "Running";
-    const newState = stateChangeEvent.newState === State.Stopped ? "Stopped" :
-                     stateChangeEvent.newState === State.Starting ? "Starting" : "Running";
+  // Wait for compiler resolution before starting server
+  compilerManager.getCompilerPath().then((grenCompilerPath) => {
+    console.log("Gren LSP Extension: Compiler resolution completed:", grenCompilerPath);
     
-    outputChannel.appendLine(`🔄 LSP client state changed: ${oldState} → ${newState}`);
-    
-    if (newState === "Running") {
-      outputChannel.appendLine(`✅ LSP client successfully connected to server!`);
-      outputChannel.appendLine(`📺 "Gren LSP Server" output channel should now be visible`);
-    } else if (newState === "Stopped") {
-      outputChannel.appendLine(`❌ LSP client stopped! Connection lost.`);
+    if (!grenCompilerPath) {
+      const errorMsg = `❌ No Gren compiler found. LSP server cannot start without a compiler.`;
+      outputChannel.appendLine(errorMsg);
       outputChannel.show(true);
-      window.showErrorMessage('Gren LSP server connection lost. Check output for errors.');
+      console.error("Gren LSP Extension: No compiler found");
+      window.showErrorMessage(`${errorMsg}\n\nPlease install Gren compiler or use the extension's download feature.`);
+      return;
     }
-  });
 
-  // Show log file location to user
-  const tempDir = require('os').tmpdir();
-  const logPath = path.join(tempDir, 'gren-lsp', 'server.log');
-  outputChannel.appendLine(`📄 LSP server logs will be written to: ${logPath}`);
-  outputChannel.appendLine(`💡 To debug server issues, check this log file or run manually:`);
-  outputChannel.appendLine(`   ${serverPath} --help`);
-  
-  // Start the client. This will also launch the server
-  outputChannel.appendLine(`⚡ Starting LSP client...`);
-  outputChannel.appendLine(`📋 Server command: ${serverPath} ${parseTreeArgs.join(' ')}`);
-  outputChannel.appendLine(`🌍 Environment: RUST_LOG=${rustLogLevel}`);
-  
-  const startTime = Date.now();
-  client.start().then(() => {
-    const duration = Date.now() - startTime;
-    outputChannel.appendLine(`✅ Gren LSP client started successfully (${duration}ms)`);
-    outputChannel.appendLine(`📄 Check server logs at: ${logPath}`);
-    outputChannel.appendLine(`🎉 Extension is now active and ready!`);
-    outputChannel.appendLine(`\\n💡 You should now see two channels in the Output panel:`);
-    outputChannel.appendLine(`  - "Gren LSP Extension" (this channel) - Extension logs`);
-    outputChannel.appendLine(`  - "Gren LSP Server" - LSP communication logs`);
-    outputChannel.appendLine(`\\n🔍 If you don't see "Gren LSP Server" channel:`);
-    outputChannel.appendLine(`  1. The server may have crashed during startup`);
-    outputChannel.appendLine(`  2. Check server logs at: ${logPath}`);
-    outputChannel.appendLine(`  3. Check Developer Tools console for errors`);
-    outputChannel.appendLine(`  4. Try running manually: ${serverPath} --help`);
-    outputChannel.appendLine(`\\n📋 Server process details:`);
-    outputChannel.appendLine(`  - Command: ${serverPath}`);
-    outputChannel.appendLine(`  - Args: ${parseTreeArgs.join(' ')}`);
-    outputChannel.appendLine(`  - RUST_LOG: ${rustLogLevel}`);
-  }).catch(err => {
-    const duration = Date.now() - startTime;
-    outputChannel.appendLine(`❌ Failed to start Gren LSP server after ${duration}ms`);
-    outputChannel.appendLine(`Error details: ${err.message}`);
-    outputChannel.appendLine(`Stack trace: ${err.stack || 'No stack trace available'}`);
+    outputChannel.appendLine(`✅ Gren compiler found: ${grenCompilerPath}`);
+    outputChannel.appendLine(`🚀 Starting LSP server with compiler path...`);
+    console.log("Gren LSP Extension: Starting LSP server with compiler:", grenCompilerPath);
+
+    // Configure server executable with the resolved compiler path
+    const traceLevel = config.get<string>('trace.server', 'off');
+    const rustLogLevel = traceLevel === 'verbose' ? 'gren_lsp=debug' : 'gren_lsp=info';
+    outputChannel.appendLine(`🔧 Server args: ${parseTreeArgs.join(' ')}`);
+    outputChannel.appendLine(`📊 RUST_LOG level: ${rustLogLevel}`);
+    outputChannel.appendLine(`🛠️ GREN_COMPILER_PATH: ${grenCompilerPath}`);
+    
+    const serverExecutable: Executable = {
+      command: serverPath,
+      args: parseTreeArgs,
+      options: {
+        env: {
+          ...process.env,
+          RUST_LOG: rustLogLevel,
+          // Pass the compiler path to the LSP server via environment variable
+          GREN_COMPILER_PATH: grenCompilerPath
+        }
+      }
+    };
+
+    const serverOptions: ServerOptions = serverExecutable;
+
+    // Options to control the language client
+    const clientOptions: LanguageClientOptions = {
+      // Register the server for Gren documents
+      documentSelector: [{ scheme: "file", language: "gren" }],
+      synchronize: {
+        // Notify the server about file changes to Gren files
+        fileEvents: workspace.createFileSystemWatcher("**/*.gren"),
+        // Synchronize the configuration section to the server
+        configurationSection: 'grenLsp'
+      },
+      outputChannelName: "Gren LSP Server",
+      // Enable trusted markdown for clickable links in hover content
+      markdown: {
+        isTrusted: true,
+      }
+    };
+    
+    outputChannel.appendLine(`📋 Client options configured:`);
+    outputChannel.appendLine(`  - Document selector: file:gren`);
+    outputChannel.appendLine(`  - File watcher: **/*.gren`);
+    outputChannel.appendLine(`  - Output channel: ${clientOptions.outputChannelName}`);
+
+    // Create the language client and start the client.
+    outputChannel.appendLine(`🚀 Creating LSP client...`);
+    client = new LanguageClient(
+      "gren-lsp",
+      "Gren Language Server",
+      serverOptions,
+      clientOptions
+    );
+
+    // Enable LSP protocol tracing if verbose mode is on
+    if (traceLevel === 'verbose') {
+      outputChannel.appendLine(`🔍 Enabling verbose LSP protocol tracing...`);
+      client.setTrace(Trace.Verbose);
+    }
+    
+    // Add state change monitoring to track connection lifecycle
+    client.onDidChangeState((stateChangeEvent) => {
+      const oldState = stateChangeEvent.oldState === State.Stopped ? "Stopped" :
+                       stateChangeEvent.oldState === State.Starting ? "Starting" : "Running";
+      const newState = stateChangeEvent.newState === State.Stopped ? "Stopped" :
+                       stateChangeEvent.newState === State.Starting ? "Starting" : "Running";
+      
+      outputChannel.appendLine(`🔄 LSP client state changed: ${oldState} → ${newState}`);
+      
+      if (newState === "Running") {
+        outputChannel.appendLine(`✅ LSP client successfully connected to server!`);
+        outputChannel.appendLine(`📺 "Gren LSP Server" output channel should now be visible`);
+      } else if (newState === "Stopped") {
+        outputChannel.appendLine(`❌ LSP client stopped! Connection lost.`);
+        outputChannel.show(true);
+        window.showErrorMessage('Gren LSP server connection lost. Check output for errors.');
+      }
+    });
+
+    // Show log file location to user
+    const tempDir = require('os').tmpdir();
+    const logPath = path.join(tempDir, 'gren-lsp', 'server.log');
+    outputChannel.appendLine(`📄 LSP server logs will be written to: ${logPath}`);
+    outputChannel.appendLine(`💡 To debug server issues, check this log file or run manually:`);
+    outputChannel.appendLine(`   ${serverPath} --help`);
+    
+    // Start the client. This will also launch the server
+    outputChannel.appendLine(`⚡ Starting LSP client...`);
+    outputChannel.appendLine(`📋 Server command: ${serverPath} ${parseTreeArgs.join(' ')}`);
+    outputChannel.appendLine(`🌍 Environment: RUST_LOG=${rustLogLevel}, GREN_COMPILER_PATH=${grenCompilerPath}`);
+    console.log("Gren LSP Extension: About to start LSP client");
+    
+    const startTime = Date.now();
+    client.start().then(() => {
+      const duration = Date.now() - startTime;
+      outputChannel.appendLine(`✅ Gren LSP client started successfully (${duration}ms)`);
+      outputChannel.appendLine(`📄 Check server logs at: ${logPath}`);
+      outputChannel.appendLine(`🎉 Extension is now active and ready!`);
+      console.log("Gren LSP Extension: LSP client started successfully in", duration, "ms");
+      outputChannel.appendLine(`\n💡 You should now see two channels in the Output panel:`);
+      outputChannel.appendLine(`  - "Gren LSP Extension" (this channel) - Extension logs`);
+      outputChannel.appendLine(`  - "Gren LSP Server" - LSP communication logs`);
+      outputChannel.appendLine(`\n🔍 If you don't see "Gren LSP Server" channel:`);
+      outputChannel.appendLine(`  1. The server may have crashed during startup`);
+      outputChannel.appendLine(`  2. Check server logs at: ${logPath}`);
+      outputChannel.appendLine(`  3. Check Developer Tools console for errors`);
+      outputChannel.appendLine(`  4. Try running manually: ${serverPath} --help`);
+      outputChannel.appendLine(`\n📋 Server process details:`);
+      outputChannel.appendLine(`  - Command: ${serverPath}`);
+      outputChannel.appendLine(`  - Args: ${parseTreeArgs.join(' ')}`);
+      outputChannel.appendLine(`  - RUST_LOG: ${rustLogLevel}`);
+      outputChannel.appendLine(`  - GREN_COMPILER_PATH: ${grenCompilerPath}`);
+    }).catch(err => {
+      const duration = Date.now() - startTime;
+      const errorMsg = `❌ Failed to start Gren LSP server after ${duration}ms`;
+      outputChannel.appendLine(errorMsg);
+      outputChannel.appendLine(`Error details: ${err.message}`);
+      outputChannel.appendLine(`Stack trace: ${err.stack || 'No stack trace available'}`);
+      outputChannel.show(true);
+      console.error("Gren LSP Extension: Failed to start LSP client:", err);
+      window.showErrorMessage(`Failed to start Gren LSP server: ${err.message}\n\nCheck "Gren LSP Extension" output for details.`);
+    });
+
+  }).catch((error) => {
+    const errorMsg = `⚠️ Error resolving compiler path: ${error}`;
+    outputChannel.appendLine(errorMsg);
     outputChannel.show(true);
-    window.showErrorMessage(`Failed to start Gren LSP server: ${err.message}\\n\\nCheck "Gren LSP Extension" output for details.`);
+    console.error("Gren LSP Extension: Error resolving compiler path:", error);
+    window.showErrorMessage(`${errorMsg}\n\nLSP server cannot start without a compiler.`);
   });
+}
+
+// Export the client for test access
+export function getLanguageClient(): LanguageClient | undefined {
+  return client;
 }
 
 export function deactivate(): Thenable<void> | undefined {

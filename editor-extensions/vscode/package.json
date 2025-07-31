@@ -95,11 +95,18 @@
   "scripts": {
     "vscode:prepublish": "npm run compile",
     "precompile": "npm install",
-    "compile": "tsc",
+    "clean": "rm -rf out && rm -f tsconfig.tsbuildinfo",
+    "compile": "npm run clean && tsc",
     "watch": "tsc -w",
     "prepackage": "npm run compile",
     "package": "vsce package",
-    "install-extension": "npm run package && code --install-extension gren-lsp-1.0.0.vsix --force"
+    "install-extension": "npm run package && code --install-extension gren-lsp-1.0.0.vsix --force",
+    "pretest": "npm run compile",
+    "test": "node ./out/test/runTest.js",
+    "test:info": "TEST_LOG_LEVEL=info node ./out/test/runTest.js",
+    "test:debug": "TEST_LOG_LEVEL=debug node ./out/test/runTest.js",
+    "test:verbose": "TEST_LOG_LEVEL=verbose node ./out/test/runTest.js",
+    "test:ui": "node ./out/test/runTest.js"
   },
   "dependencies": {
     "vscode-languageclient": "^8.1.0"
@@ -108,6 +115,13 @@
     "@types/node": "^20.5.7",
     "@types/vscode": "^1.81.0",
     "@vscode/vsce": "^3.6.0",
-    "typescript": "^5.2.2"
+    "typescript": "^5.2.2",
+    "vscode-extension-tester": "^8.10.0",
+    "@types/mocha": "^10.0.8",
+    "mocha": "^10.8.2",
+    "@types/chai": "^4.3.20",
+    "chai": "^4.5.0",
+    "@vscode/test-electron": "^2.4.1",
+    "glob": "^11.0.0"
   }
 }
