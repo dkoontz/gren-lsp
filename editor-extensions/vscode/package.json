@@ -61,9 +61,36 @@
           "type": "string",
           "default": "",
           "description": "Directory to export parse trees to when debug mode is enabled. If empty, will use system temp directory."
+        },
+        "grenLsp.compiler.autoDownload": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically download the Gren compiler version specified in gren.json. If disabled, will use system PATH."
+        },
+        "grenLsp.compiler.path": {
+          "type": "string",
+          "default": "",
+          "description": "Path to a specific Gren compiler binary. If set, overrides automatic download and PATH lookup."
         }
       }
-    }
+    },
+    "commands": [
+      {
+        "command": "grenLsp.downloadCompiler",
+        "title": "Download Gren Compiler",
+        "category": "Gren"
+      },
+      {
+        "command": "grenLsp.showCompilerVersion",
+        "title": "Show Gren Compiler Version",
+        "category": "Gren"
+      },
+      {
+        "command": "grenLsp.testServerConnection",
+        "title": "Test Server Connection",
+        "category": "Gren"
+      }
+    ]
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",

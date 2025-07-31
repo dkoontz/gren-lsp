@@ -47,7 +47,7 @@ impl Workspace {
         })
     }
 
-    pub fn set_root(&mut self, root_uri: Url) {
+    pub fn set_root(&mut self, root_uri: Url) -> Result<()> {
         info!("Setting workspace root: {}", root_uri);
         self.root_uri = Some(root_uri.clone());
 
@@ -58,14 +58,23 @@ impl Workspace {
                     if compiler.is_available() {
                         info!("Gren compiler initialized for workspace");
                         self.compiler = Some(compiler);
+                        Ok(())
                     } else {
-                        warn!("Gren compiler not available");
+                        let error_msg = "Gren compiler not available - LSP server cannot function without a working compiler";
+                        warn!("{}", error_msg);
+                        Err(anyhow::anyhow!(error_msg))
                     }
                 }
                 Err(e) => {
-                    warn!("Failed to initialize Gren compiler: {}", e);
+                    let error_msg = format!("Failed to initialize Gren compiler: {}", e);
+                    warn!("{}", error_msg);
+                    Err(anyhow::anyhow!(error_msg))
                 }
             }
+        } else {
+            let error_msg = "Invalid workspace root URI - cannot initialize compiler";
+            warn!("{}", error_msg);
+            Err(anyhow::anyhow!(error_msg))
         }
     }
 
@@ -514,12 +523,17 @@ impl Workspace {
 
     /// Force refresh diagnostics for a specific document
     pub async fn force_refresh_diagnostics(&mut self, uri: &Url) -> Result<Vec<Diagnostic>> {
-        let (diagnostics, _global_errors) = self.force_refresh_diagnostics_with_global_errors(uri).await?;
+        let (diagnostics, _global_errors) = self
+            .force_refresh_diagnostics_with_global_errors(uri)
+            .await?;
         Ok(diagnostics)
     }
 
     /// Force refresh diagnostics and global errors for a specific document
-    pub async fn force_refresh_diagnostics_with_global_errors(&mut self, uri: &Url) -> Result<(Vec<Diagnostic>, Vec<crate::compiler::GlobalError>)> {
+    pub async fn force_refresh_diagnostics_with_global_errors(
+        &mut self,
+        uri: &Url,
+    ) -> Result<(Vec<Diagnostic>, Vec<crate::compiler::GlobalError>)> {
         info!("🔄 Force refreshing diagnostics for {}", uri);
 
         // Invalidate compiler cache for this file
@@ -548,12 +562,17 @@ impl Workspace {
 
     /// Get compiler diagnostics for a document
     pub async fn get_document_diagnostics(&mut self, uri: &Url) -> Result<Vec<Diagnostic>> {
-        let (diagnostics, _global_errors) = self.get_document_diagnostics_with_global_errors(uri).await?;
+        let (diagnostics, _global_errors) = self
+            .get_document_diagnostics_with_global_errors(uri)
+            .await?;
         Ok(diagnostics)
     }
 
     /// Get compiler diagnostics and global errors for a document
-    pub async fn get_document_diagnostics_with_global_errors(&mut self, uri: &Url) -> Result<(Vec<Diagnostic>, Vec<crate::compiler::GlobalError>)> {
+    pub async fn get_document_diagnostics_with_global_errors(
+        &mut self,
+        uri: &Url,
+    ) -> Result<(Vec<Diagnostic>, Vec<crate::compiler::GlobalError>)> {
         // Use only compiler diagnostics - they provide comprehensive and accurate error messages
         if self.has_compiler() {
             match self.compile_document(uri).await {

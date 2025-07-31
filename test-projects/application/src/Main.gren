@@ -31,6 +31,7 @@ init : {} -> { model : Model, command: Cmd Msg }
 init _ =
     { model = { count = 0 }, command = Cmd.none }
 
+this is a new def
 
 -- UPDATE
 
@@ -44,7 +45,7 @@ update : Msg -> Model -> { model : Model, command : Cmd Msg }
 update msg model =
     when msg is
         Increment ->
-            { model = { model | count  model.count + 1 }, command = Cmd.none }
+            { model = { model | count = model.count + 1 }, command = Cmd.none }
 
         Decrement ->
             { model = { model | count = model.count - 1 }, command = Cmd.none }

@@ -132,30 +132,38 @@ struct GrenPosition {
 
 impl GrenCompiler {
     /// Convert a file path to a Gren module name for 0.6.0+ compilation
-    /// Examples: 
+    /// Examples:
     /// - "src/Main.gren" → "Main"
     /// - "src/Foo/Bar.gren" → "Foo.Bar"
     fn file_path_to_module_name(&self, file_path: &Path) -> Result<String> {
         // Convert absolute path to relative path from working directory
         let relative_path = if file_path.is_absolute() {
-            file_path.strip_prefix(&self.working_dir)
-                .map_err(|_| anyhow!("File path {} is not within working directory {}", 
-                                   file_path.display(), self.working_dir.display()))?
+            file_path.strip_prefix(&self.working_dir).map_err(|_| {
+                anyhow!(
+                    "File path {} is not within working directory {}",
+                    file_path.display(),
+                    self.working_dir.display()
+                )
+            })?
         } else {
             file_path
         };
 
         // Remove the "src/" prefix if present
         let path_without_src = if relative_path.starts_with("src") {
-            relative_path.strip_prefix("src")
-                .map_err(|_| anyhow!("Failed to strip src prefix from {}", relative_path.display()))?
+            relative_path.strip_prefix("src").map_err(|_| {
+                anyhow!(
+                    "Failed to strip src prefix from {}",
+                    relative_path.display()
+                )
+            })?
         } else {
             relative_path
         };
 
         // Remove the .gren extension
         let path_without_extension = path_without_src.with_extension("");
-        
+
         // Convert path separators to dots for module name
         let module_name = path_without_extension
             .components()
@@ -164,10 +172,17 @@ impl GrenCompiler {
             .join(".");
 
         if module_name.is_empty() {
-            return Err(anyhow!("Could not determine module name from path: {}", file_path.display()));
+            return Err(anyhow!(
+                "Could not determine module name from path: {}",
+                file_path.display()
+            ));
         }
 
-        info!("🔄 Converted file path {} to module name: {}", file_path.display(), module_name);
+        info!(
+            "🔄 Converted file path {} to module name: {}",
+            file_path.display(),
+            module_name
+        );
         Ok(module_name)
     }
 
@@ -185,74 +200,123 @@ impl GrenCompiler {
         })
     }
 
-    /// Find the gren executable in PATH
+    /// Find the gren executable using only configured or extension-downloaded compilers
+    /// Never uses PATH to prevent version mismatches
     fn find_gren_executable() -> Result<PathBuf> {
-        // Log the current PATH for debugging
-        if let Ok(path_env) = std::env::var("PATH") {
-            info!("🔍 Current PATH: {}", path_env);
+        info!("🔍 Looking for Gren compiler (PATH never used)");
+
+        // First priority: Check GREN_COMPILER_PATH environment variable set by VS Code extension
+        if let Ok(compiler_path) = std::env::var("GREN_COMPILER_PATH") {
+            if !compiler_path.is_empty() {
+                info!("🔍 Found GREN_COMPILER_PATH: {}", compiler_path);
+                let path = PathBuf::from(&compiler_path);
+
+                // Verify the compiler exists and works
+                if path.exists() {
+                    match Command::new(&path)
+                        .arg("--help")
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .status()
+                    {
+                        Ok(output) if output.success() => {
+                            info!(
+                                "✅ Verified Gren compiler from GREN_COMPILER_PATH: {}",
+                                compiler_path
+                            );
+
+                            // Get version information for debugging
+                            if let Ok(version_output) =
+                                Command::new(&path).arg("--version").output()
+                            {
+                                let version_str = String::from_utf8_lossy(&version_output.stdout);
+                                info!("📋 Gren compiler version: {}", version_str.trim());
+                            }
+
+                            return Ok(path);
+                        }
+                        Ok(_) => {
+                            warn!(
+                                "⚠️ Compiler at GREN_COMPILER_PATH exists but --help failed: {}",
+                                compiler_path
+                            );
+                        }
+                        Err(e) => {
+                            warn!(
+                                "⚠️ Failed to execute compiler at GREN_COMPILER_PATH {}: {}",
+                                compiler_path, e
+                            );
+                        }
+                    }
+                } else {
+                    warn!(
+                        "⚠️ Compiler path from GREN_COMPILER_PATH does not exist: {}",
+                        compiler_path
+                    );
+                }
+            } else {
+                info!("🔍 GREN_COMPILER_PATH is set but empty");
+            }
         } else {
-            warn!("⚠️ No PATH environment variable found");
+            info!("🔍 No GREN_COMPILER_PATH environment variable found");
         }
 
-        // Try common locations
-        let candidates = vec!["gren", "/usr/local/bin/gren", "/opt/homebrew/bin/gren"];
+        // Second priority: Check common local installation locations
+        let home_dir = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+        let local_paths = vec![
+            // Editor extension download locations
+            format!("{}/.vscode/extensions/gren-lsp/bin/gren", home_dir),
+            format!("{}/.vscode-server/extensions/gren-lsp/bin/gren", home_dir),
+            // User's local bin directory
+            format!("{}/.local/bin/gren-0.6.0", home_dir),
+            format!("{}/.local/bin/gren", home_dir),
+        ];
 
-        for candidate in candidates {
-            info!("🔍 Trying Gren compiler candidate: {}", candidate);
-            
-            match Command::new(candidate)
-                .arg("--help")
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-            {
-                Ok(output) => {
-                    if output.success() {
-                        info!("✅ Found working Gren compiler: {}", candidate);
-                        
-                        // Resolve to absolute path to avoid PATH issues when running from temp directories
-                        let absolute_path = if candidate == "gren" {
-                            // For the generic "gren" command, resolve the actual path using 'which'
-                            match Command::new("which")
-                                .arg("gren")
-                                .output()
-                            {
-                                Ok(which_output) if which_output.status.success() => {
-                                    let path_str = String::from_utf8_lossy(&which_output.stdout).trim().to_string();
-                                    info!("🔍 Resolved 'gren' to absolute path: {}", path_str);
-                                    PathBuf::from(path_str)
-                                }
-                                _ => {
-                                    warn!("⚠️ Failed to resolve 'gren' to absolute path, using relative path");
-                                    PathBuf::from(candidate)
-                                }
-                            }
-                        } else {
-                            // Already an absolute path
-                            PathBuf::from(candidate)
-                        };
-                        
+        for candidate_path in local_paths {
+            info!(
+                "🔍 Trying local Gren compiler: {}",
+                candidate_path
+            );
+            let path = PathBuf::from(&candidate_path);
+
+            if path.exists() {
+                match Command::new(&path)
+                    .arg("--help")
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                {
+                    Ok(output) if output.success() => {
+                        info!("✅ Found working Gren compiler: {}", candidate_path);
+
                         // Get version information for debugging
-                        if let Ok(version_output) = Command::new(&absolute_path)
-                            .arg("--version")
-                            .output()
-                        {
+                        if let Ok(version_output) = Command::new(&path).arg("--version").output() {
                             let version_str = String::from_utf8_lossy(&version_output.stdout);
                             info!("📋 Gren compiler version: {}", version_str.trim());
                         }
-                        
-                        return Ok(absolute_path);
-                    } else {
-                        info!("❌ Candidate {} exists but --help failed", candidate);
+
+                        return Ok(path);
+                    }
+                    Ok(_) => {
+                        info!("❌ Candidate {} exists but --help failed", candidate_path);
+                    }
+                    Err(e) => {
+                        info!("❌ Candidate {} not accessible: {}", candidate_path, e);
                     }
                 }
-                Err(e) => {
-                    info!("❌ Candidate {} not accessible: {}", candidate, e);
-                }
+            } else {
+                info!("❌ Candidate {} does not exist", candidate_path);
             }
         }
 
-        Err(anyhow!("Could not find gren executable in PATH"))
+        Err(anyhow!(
+            "Could not find gren executable. Checked:\n\
+            1. GREN_COMPILER_PATH environment variable\n\
+            2. Local installation locations\n\
+            \n\
+            PATH is never used to prevent version mismatches.\n\
+            Please set GREN_COMPILER_PATH environment variable to point to your Gren compiler."
+        ))
     }
 
     /// Compile a Gren file and return diagnostics
@@ -277,11 +341,16 @@ impl GrenCompiler {
             info!("🆕 No cached result for {}", file_path.display());
         }
 
+        info!("🔍 Calling run_compiler...");
         let result = self.run_compiler(file_path).await?;
+        info!("✅ run_compiler completed successfully");
 
         // Cache the result
+        info!("🔍 Caching compilation result...");
         self.cache.insert(file_path.to_path_buf(), result.clone());
+        info!("✅ Compilation result cached");
 
+        info!("✅ compile_file completed successfully - returning to caller");
         Ok(result)
     }
 
@@ -292,13 +361,26 @@ impl GrenCompiler {
         // Convert file path to module name for Gren 0.6.0+ compatibility
         let module_name = self.file_path_to_module_name(file_path)?;
 
+        info!("🔍 About to execute compiler: {}", self.gren_path.display());
+        info!("🔍 Module name: {}", module_name);
+        info!("🔍 Working directory: {}", self.working_dir.display());
+
+        // Quick verification that the compiler exists
+        if !self.gren_path.exists() {
+            return Err(anyhow!(
+                "Compiler path does not exist: {}",
+                self.gren_path.display()
+            ));
+        }
+
         let mut cmd = AsyncCommand::new(&self.gren_path);
         cmd.arg("make")
             .arg(&module_name)
             .arg("--report=json")
             .current_dir(&self.working_dir)
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stderr(Stdio::piped())
+            .kill_on_drop(true); // Ensure process is killed if dropped
 
         // Only add --output for applications, not packages
         if project_type == ProjectType::Application {
@@ -314,8 +396,23 @@ impl GrenCompiler {
         debug!("Command: {:?}", cmd);
 
         let start_time = std::time::Instant::now();
-        let output = cmd.output().await?;
+        info!("🚀 Starting compiler execution...");
+
+        // Add timeout to prevent hanging
+        let output = match tokio::time::timeout(
+            std::time::Duration::from_secs(30), // 30 second timeout
+            cmd.output(),
+        )
+        .await
+        {
+            Ok(result) => result?,
+            Err(_) => {
+                return Err(anyhow!("Compiler execution timed out after 30 seconds"));
+            }
+        };
+
         let duration = start_time.elapsed();
+        info!("✅ Compiler execution completed after {:?}", duration);
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -330,6 +427,7 @@ impl GrenCompiler {
             info!("Compiler stderr: {}", stderr);
         }
 
+        info!("🔍 Parsing compiler output...");
         let (diagnostics, global_errors) = self.parse_compiler_output(&stderr)?;
         info!("📋 Found {} compiler diagnostics", diagnostics.len());
         if !global_errors.is_empty() {
@@ -338,14 +436,19 @@ impl GrenCompiler {
                 info!("   - {}: {}", error.title, error.message);
             }
         }
+        info!("✅ Finished parsing compiler output");
 
-        Ok(CompilationResult {
+        info!("🔍 Creating compilation result...");
+        let result = CompilationResult {
             success,
             diagnostics,
             global_errors,
             timestamp: SystemTime::now(),
             content_hash: self.calculate_content_hash(file_path)?,
-        })
+        };
+        info!("✅ Compilation result created successfully");
+
+        Ok(result)
     }
 
     /// Run the Gren compiler on a file from a specific working directory
@@ -359,7 +462,7 @@ impl GrenCompiler {
         // Log the exact compiler path being used for debugging
         info!("🔍 Using Gren compiler path: {}", self.gren_path.display());
         info!("🔍 Compiler working directory: {}", working_dir.display());
-        
+
         // Test the compiler version from this exact location for debugging
         if let Ok(version_check) = Command::new(&self.gren_path)
             .arg("--version")
@@ -367,11 +470,14 @@ impl GrenCompiler {
             .output()
         {
             let version_str = String::from_utf8_lossy(&version_check.stdout);
-            info!("🔍 Compiler version check from temp dir: {}", version_str.trim());
+            info!(
+                "🔍 Compiler version check from temp dir: {}",
+                version_str.trim()
+            );
         } else {
             warn!("⚠️ Failed to check compiler version from temp directory");
         }
-        
+
         // Also test from the original working directory for comparison
         if let Ok(version_check_orig) = Command::new(&self.gren_path)
             .arg("--version")
@@ -379,11 +485,17 @@ impl GrenCompiler {
             .output()
         {
             let version_str = String::from_utf8_lossy(&version_check_orig.stdout);
-            info!("🔍 Compiler version check from original dir: {}", version_str.trim());
+            info!(
+                "🔍 Compiler version check from original dir: {}",
+                version_str.trim()
+            );
         }
-        
+
         // Check if there are any environment differences
-        info!("🔍 NODE_PATH in temp compilation: {:?}", std::env::var("NODE_PATH"));
+        info!(
+            "🔍 NODE_PATH in temp compilation: {:?}",
+            std::env::var("NODE_PATH")
+        );
         info!("🔍 Current working dir: {:?}", std::env::current_dir());
 
         // Convert file path to module name for Gren 0.6.0+ compatibility
@@ -393,7 +505,10 @@ impl GrenCompiler {
             // The module name is just the file name without extension
             file_name.to_string_lossy().to_string()
         } else {
-            return Err(anyhow!("Could not determine module name from temp file path: {}", file_path.display()));
+            return Err(anyhow!(
+                "Could not determine module name from temp file path: {}",
+                file_path.display()
+            ));
         };
 
         info!("🔄 Using module name for temp compilation: {}", module_name);
@@ -418,11 +533,19 @@ impl GrenCompiler {
         );
         info!("📂 Working directory: {}", working_dir.display());
         debug!("Command: {:?}", cmd);
-        
+
         // Debug: Show the exact command that will be executed
-        let output_arg = if project_type == ProjectType::Application { " --output=/dev/null" } else { "" };
-        info!("🔍 Full command: {} make {} --report=json{}", 
-              self.gren_path.display(), module_name, output_arg);
+        let output_arg = if project_type == ProjectType::Application {
+            " --output=/dev/null"
+        } else {
+            ""
+        };
+        info!(
+            "🔍 Full command: {} make {} --report=json{}",
+            self.gren_path.display(),
+            module_name,
+            output_arg
+        );
 
         let start_time = std::time::Instant::now();
         let output = cmd.output().await?;
@@ -441,6 +564,7 @@ impl GrenCompiler {
             info!("Compiler stderr: {}", stderr);
         }
 
+        info!("🔍 Parsing compiler output...");
         let (diagnostics, global_errors) = self.parse_compiler_output(&stderr)?;
         info!("📋 Found {} compiler diagnostics", diagnostics.len());
         if !global_errors.is_empty() {
@@ -449,14 +573,19 @@ impl GrenCompiler {
                 info!("   - {}: {}", error.title, error.message);
             }
         }
+        info!("✅ Finished parsing compiler output");
 
-        Ok(CompilationResult {
+        info!("🔍 Creating compilation result...");
+        let result = CompilationResult {
             success,
             diagnostics,
             global_errors,
             timestamp: SystemTime::now(),
             content_hash: self.calculate_content_hash(file_path)?,
-        })
+        };
+        info!("✅ Compilation result created successfully");
+
+        Ok(result)
     }
 
     /// Copy all source files from the project to the temporary directory
@@ -535,7 +664,10 @@ impl GrenCompiler {
     }
 
     /// Parse JSON output from Gren compiler
-    fn parse_compiler_output(&self, output: &str) -> Result<(Vec<CompilerDiagnostic>, Vec<GlobalError>)> {
+    fn parse_compiler_output(
+        &self,
+        output: &str,
+    ) -> Result<(Vec<CompilerDiagnostic>, Vec<GlobalError>)> {
         let mut diagnostics = Vec::new();
         let mut global_errors = Vec::new();
 
@@ -566,13 +698,21 @@ impl GrenCompiler {
                         }
                     }
                 }
-                GrenCompilerOutput::Error { path, title, message } => {
+                GrenCompilerOutput::Error {
+                    path,
+                    title,
+                    message,
+                } => {
                     info!("🚨 Global compiler error detected: {}", title);
                     let global_error = GlobalError {
                         severity: DiagnosticSeverity::Error,
                         title: title.clone(),
                         message: self.extract_message_text(message),
-                        path: if path.is_empty() { None } else { Some(PathBuf::from(path)) },
+                        path: if path.is_empty() {
+                            None
+                        } else {
+                            Some(PathBuf::from(path))
+                        },
                     };
                     global_errors.push(global_error);
                 }
@@ -1057,7 +1197,9 @@ mod tests {
         // Test version mismatch error parsing
         let version_mismatch_json = r#"{"type":"error","path":"gren.json","title":"GREN VERSION MISMATCH","message":["Your gren.json says this application needs a different version of Gren.\n\nIt requires ",{"bold":false,"underline":false,"color":"GREEN","string":"0.5.4"},", but you are using ",{"bold":false,"underline":false,"color":"RED","string":"0.5.3"}," right now."]}"#;
 
-        let (diagnostics, global_errors) = compiler.parse_compiler_output(version_mismatch_json).unwrap();
+        let (diagnostics, global_errors) = compiler
+            .parse_compiler_output(version_mismatch_json)
+            .unwrap();
 
         // Should have no regular diagnostics, but one global error
         assert_eq!(diagnostics.len(), 0);

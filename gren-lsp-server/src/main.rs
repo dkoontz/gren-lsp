@@ -49,6 +49,13 @@ async fn main() -> Result<()> {
         .init();
 
     info!("LSP server starting up");
+
+    // Truncate the log file on startup for easier debugging
+    if log_file.exists() {
+        std::fs::write(&log_file, "").ok();
+        info!("Truncated existing log file for fresh start");
+    }
+
     info!("Log file location: {}", log_file.display());
 
     info!("Starting Gren Language Server");
