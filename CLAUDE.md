@@ -8,21 +8,7 @@ This is a Language Server Protocol (LSP) implementation for the Gren programming
 
 ## Common Development Commands
 
-### Essential Commands (using just)
-- `just build` - Build the project
-- `just test` - Run all tests  
-- `just check` - Run format check, lint, and tests
-- `just fmt` - Format code
-- `just lint` - Run clippy lints
-- `just run` - Run the LSP server
-- `just run-debug` - Run with debug logging (`RUST_LOG=gren_lsp=debug`)
-- `just ci` - Run all CI checks locally (check + audit)
 
-### Development Workflow
-- `just watch` - Watch for changes and rebuild
-- `just watch-test` - Watch and run tests
-- `just install` - Install LSP binary locally
-- `just doc` - Generate and open documentation
 
 ### VS Code Extension
 - `just vscode-build` - Build VS Code extension
@@ -30,33 +16,6 @@ This is a Language Server Protocol (LSP) implementation for the Gren programming
 - `just vscode-watch` - Watch extension development
 
 ## Architecture
-
-### Workspace Structure
-This is a Rust workspace with three main crates:
-- **gren-lsp-server**: Main LSP server binary (`src/main.rs`, `src/server.rs`)
-- **gren-lsp-core**: Core analysis engine with modules:
-  - `analysis.rs` - Analysis coordination
-  - `parser.rs` - Tree-sitter parsing
-  - `workspace.rs` - Workspace management with LRU caching
-  - `symbol.rs` - Symbol indexing with SQLite backend
-  - `document.rs` - Document state management
-  - `diagnostics.rs` - Error reporting
-- **gren-lsp-protocol**: LSP protocol handlers (`handlers.rs`)
-
-### Key Dependencies
-- `tower-lsp` - LSP framework
-- `tree-sitter` - Incremental parsing
-- `rusqlite` - Symbol database
-- `tokio` - Async runtime
-- `tracing` - Structured logging
-
-### Data Flow
-1. Editor communicates via LSP protocol through `gren-lsp-server`
-2. Server delegates to protocol handlers in `gren-lsp-protocol`
-3. Core analysis happens in `gren-lsp-core` components
-4. Workspace manages documents with LRU caching
-5. Parser uses tree-sitter for incremental parsing
-6. Symbol index maintains SQLite database for fast lookups
 
 ## Development Notes
 
@@ -68,12 +27,6 @@ This is a Rust workspace with three main crates:
 
 ### LSP documentation
 The LSP spec is available in the `.docs/lsp-spec/3.18` folder. The documentation is broken out according to message types and pages are linked using `{% include types/uri.md %}` directives that indicate the contents of another file should be inserted at that point in the document.
-
-### Testing
-- Unit tests are in `src/` alongside modules
-- Integration tests in `tests/` directories
-- Benchmarks in `benches/` (gren-lsp-core)
-- Test files available in `test-files/` directory
 
 ### Gren Language Characteristics
 - Pure functional with no exceptions (uses Maybe/Result types)
@@ -89,12 +42,3 @@ The LSP spec is available in the `.docs/lsp-spec/3.18` folder. The documentation
 - SQLite database for persistent symbol indexing
 - Async processing to prevent editor blocking
 - Incremental parsing with tree-sitter for efficiency
-
-### Toolchain
-- Rust 1.82.0 (specified in rust-toolchain.toml)
-- Uses workspace dependencies for version management
-- Release profile optimized for performance (LTO enabled)
-
-## Current Development Status
-
-The project follows epic-based development with documentation in `docs/epics/`. Core LSP functionality is being implemented with tree-sitter parsing as a foundation for eventual full Gren compiler integration.

@@ -31,7 +31,6 @@ init : {} -> { model : Model, command: Cmd Msg }
 init _ =
     { model = { count = 0 }, command = Cmd.none }
 
-this is a new def
 
 -- UPDATE
 
