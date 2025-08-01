@@ -154,6 +154,8 @@ pub enum DocumentError {
 
 **Purpose**: Provide structural analysis of Gren code without regex patterns
 
+**Grammar Source**: [tree-sitter-gren](https://github.com/MaeBrooks/tree-sitter-gren)
+
 **Implementation Prerequisites**:
 Before implementing any tree-sitter functionality, a baseline AST capture must be established:
 

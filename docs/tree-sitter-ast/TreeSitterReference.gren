@@ -417,11 +417,16 @@ arrayOperations input =
 -- Array destructuring
 firstTwo : Array a -> Maybe { first: a, second: a }
 firstTwo arr =
-    when { first = Array.get 0 arr, second = Array.get 1 arr } is
-        { first = Just first, second = Just second } ->
-            Just { first = first, second = second }
+    when Array.get 0 arr is
+        Just first ->
+            when Array.get 1 arr is
+                Just second ->
+                    Just { first = first, second = second }
 
-        _ ->
+                Nothing ->
+                    Nothing
+
+        Nothing ->
             Nothing
 
 
