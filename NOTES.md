@@ -1,48 +1,289 @@
-Now we need to look at the way the tests are being carried out. Look at ./editor-extensions/vscode/src/test/suite/lsp-protocol.test.ts. The tests in this file are not actually asserting anything about the LSP although that is what they state they are doing. Let's go one by one:
-
-- should send textDocument/didOpen when opening Gren file
-What it does: this test opens a test file, gets the extension, but then simply checks if some text is in the file
-What it should do: after getting the extension, the test should validate that it is was loaded correctly and is active (no errors starting u)
-
-- should send textDocument/didChange when editing Gren file
-What it does: this test inserts a block of text into an existing document, then checks if the file contains the new text
-What it should do: after inserting the new contents, it should validate that the LSP was sent an event and then responded with the correct data (probably saying there were no diagnostics since the file doesn't have any errors). Also the delay time on LSP processing can be much lower, 1000ms should be plenty
-
-- should handle hover requests on symbols
-What it does: sets the cursor at a specific location and triggers the hover action in VS Code, then it doesn't assert anything
-What it should do: after triggering the hover it should wait for a short delay (1000ms) and then assert that the LSP received the request and responded with the expected data for the symbol
-
-- should handle go-to-definition requests
-What it does: set the cursor at a symbol and triggers the go-to-definition action, then it doesn't assert anything
-What is should do: after triggering the go-to-definition action, delay slightly, then assert the cursor has moved to the correct position in the document
-
-
-## More tests that allow bad states
-I am continuing to see test cases that excuse failure states. For example: `Extension is not active - may affect protocol tests`. If the extension is not active, and these are tests to validate the extension, then WHAT ARE WE EVEN TESTING? We absolutely must get rid of any cases like this. If the test is to validate the extension is loaded, then anything other than the extension being loaded is a failure.
-
-## Change logging levels for VS Code extension
-
-There is a lot of info currently being logged in the VS Code extension. This info is really valuable when debugging but overwhelming when just checking to see if something is happening. I want to move the log level of several events from info to debug.
-
-This message is great at INFO, it informs the user that a top-level event (looking up a symbol) is happening.
-
-
-`2025-07-30T18:48:30.097254Z  INFO gren_lsp_protocol::handlers: Searching for 'Tetromino' in module 'Dedris'`
-
-The next few messages are more suited to debugging and therefore should be at the DEBUG log level.
-
+For the test `should handle completion requests` I want to be more specific on what we are expecting. The current implementation allows for two different structures but there should only be 1 (unless you have a reason why it can be either)
 ```
-2025-07-30T18:48:30.097531Z  INFO gren_lsp_protocol::handlers: 🔍 Checking if symbol 'Tetromino' in file '/Users/david/dev/gren-lsp-test-projects/tetris/src/Dedris/Tetromino.gren' matches module path 'Dedris'
-2025-07-30T18:48:30.097551Z  INFO gren_lsp_protocol::handlers: ❌ Pattern 1 failed: '/Users/david/dev/gren-lsp-test-projects/tetris/src/Dedris/Tetromino.gren' does not end with '/Dedris.gren'
-2025-07-30T18:48:30.097561Z  INFO gren_lsp_protocol::handlers: ❌ Pattern 2 failed: '/Users/david/dev/gren-lsp-test-projects/tetris/src/Dedris/Tetromino.gren' does not end with '/Dedris.gren'
-2025-07-30T18:48:30.097574Z  INFO gren_lsp_protocol::handlers: ❌ Symbol in '/Users/david/dev/gren-lsp-test-projects/tetris/src/Dedris/Tetromino.gren' does not match required module path 'Dedris'
-2025-07-30T18:48:30.097582Z  INFO gren_lsp_protocol::handlers: 🔍 Checking if symbol 'Tetromino' in file '/Users/david/dev/gren-lsp-test-projects/tetris/src/Dedris/Tetromino.gren' matches module path 'Dedris'
-2025-07-30T18:48:30.097588Z  INFO gren_lsp_protocol::handlers: ❌ Pattern 1 failed: '/Users/david/dev/gren-lsp-test-projects/tetris/src/Dedris/Tetromino.gren' does not end with '/Dedris.gren'
-2025-07-30T18:48:30.097595Z  INFO gren_lsp_protocol::handlers: ❌ Pattern 2 failed: '/Users/david/dev/gren-lsp-test-projects/tetris/src/Dedris/Tetromino.gren' does not end with '/Dedris.gren'
-2025-07-30T18:48:30.097601Z  INFO gren_lsp_protocol::handlers: ❌ Symbol in '/Users/david/dev/gren-lsp-test-projects/tetris/src/Dedris/Tetromino.gren' does not match required module path 'Dedris'
-2025-07-30T18:48:30.097610Z  INFO gren_lsp_protocol::handlers: No qualified matches found for 'Tetromino' in module 'Dedris' - returning empty to avoid incorrect results
-2025-07-30T18:48:30.097618Z  INFO gren_lsp_protocol::handlers: No hover content generated for 'Tetromino'
+const greetCompletion = completions.items.find(item =>
+  item.label === 'greet' || (typeof item.label === 'object' && item.label.label === 'greet')
+);
 ```
+Can you run the test so it fails and log the actual output so you can see the format that is being returned?
 
-## VS Code extension doesn't set environment variable
-The GREN_COMPILER_PATH is not being set by the VS Code extension causing the LSP server to fail. The extension should only start the server after downloading a Gren compiler and then must set the environment variable.
+
+
+
+
+
+
+## Strange error output
+
+When I run `npm test` I see the test produce some errors that seem to be unexpected. I believe it's during the test where we intentionally kill the server process, but it seems like we're not detecting the connection is down and that is causing downstream failures.
+
+ Extension Lifecycle & Server Management Tests
+    ✔ LSP server binary should exist
+    ✔ LSP server binary should be executable
+    ✔ LSP server should respond to --help
+    ✔ extension should be installed and discoverable
+    ✔ extension should activate on Gren file (47ms)
+    ✔ extension configuration should have valid default values
+Sending notification failed.
+Sending request failed.
+Error: Unexpected SIGPIPE
+        at process.<anonymous> (file:///Users/david/dev/gren-lsp/editor-extensions/vscode/.vscode-test/vscode-darwin-arm64-1.102.3/Visual%20Studio%20Code.app/Contents/Resources/app/out/bootstrap-fork.js:3:11865)
+        at process.emit (node:events:518:28)
+Sending request failed.
+Sending notification failed.
+Sending cancellation messages for id 28 failed
+Sending notification failed.
+Sending cancellation messages for id 29 failed
+Sending notification failed.
+Sending notification failed.
+Sending request failed.
+Sending request failed.
+Sending notification failed.
+Sending notification failed.
+Sending cancellation messages for id 30 failed
+Sending notification failed.
+Sending cancellation messages for id 31 failed
+Sending notification failed.
+Sending request failed.
+Sending request failed.
+Sending notification failed.
+Sending notification failed.
+Sending cancellation messages for id 32 failed
+Sending notification failed.
+Sending notification failed.
+Sending cancellation messages for id 33 failed
+Sending notification failed.
+Sending notification failed.
+Sending request failed.
+Sending request failed.
+Sending notification failed.
+Sending notification failed.
+Sending cancellation messages for id 34 failed
+Sending notification failed.
+Sending notification failed.
+Sending notification failed.
+Sending request failed.
+Sending notification failed.
+Sending cancellation messages for id 36 failed
+Sending notification failed.
+Sending notification failed.
+Sending cancellation messages for id 35 failed
+Sending request failed.
+Sending request failed.
+Sending notification failed.
+Sending notification failed.
+Sending cancellation messages for id 38 failed
+Sending notification failed.
+Sending cancellation messages for id 37 failed
+Sending notification failed.
+Sending request failed.
+Sending request failed.
+Sending notification failed.
+Sending cancellation messages for id 39 failed
+Sending notification failed.
+Sending cancellation messages for id 40 failed
+Sending notification failed.
+Sending notification failed.
+Sending notification failed.
+Sending request failed.
+Sending request failed.
+Sending notification failed.
+Sending notification failed.
+Sending cancellation messages for id 41 failed
+Sending notification failed.
+Sending notification failed.
+Sending notification failed.
+Sending notification failed.
+Sending cancellation messages for id 42 failed
+Sending notification failed.
+Sending request failed.
+Sending request failed.
+Sending notification failed.
+Sending cancellation messages for id 43 failed
+Sending notification failed.
+Sending cancellation messages for id 44 failed
+Sending notification failed.
+Sending notification failed.
+Sending request failed.
+Sending request failed.
+Sending notification failed.
+Sending request failed.
+Sending notification failed.
+Sending cancellation messages for id 47 failed
+Sending notification failed.
+Sending cancellation messages for id 45 failed
+Sending notification failed.
+Sending cancellation messages for id 46 failed
+Sending notification failed.
+Sending request failed.
+Sending request failed.
+Sending request failed.
+Sending notification failed.
+Sending cancellation messages for id 50 failed
+Sending notification failed.
+Sending cancellation messages for id 48 failed
+Sending notification failed.
+Sending cancellation messages for id 49 failed
+An unknown error occurred. Please consult the log for more details.
+Sending notification failed.
+Sending request failed.
+Sending request failed.
+Sending request failed.
+Sending notification failed.
+Sending cancellation messages for id 53 failed
+Sending notification failed.
+Sending cancellation messages for id 51 failed
+Sending notification failed.
+Sending cancellation messages for id 52 failed
+Sending notification failed.
+Sending notification failed.
+Sending notification failed.
+Sending notification failed.
+Sending request failed.
+Sending request failed.
+Sending notification failed.
+Sending request failed.
+Sending notification failed.
+Sending notification failed.
+Sending cancellation messages for id 56 failed
+Sending notification failed.
+Sending cancellation messages for id 54 failed
+Sending notification failed.
+Sending cancellation messages for id 55 failed
+Sending request failed.
+Sending request failed.
+Sending request failed.
+Sending notification failed.
+Sending notification failed.
+Sending notification failed.
+Sending cancellation messages for id 59 failed
+Sending notification failed.
+Sending cancellation messages for id 57 failed
+Sending notification failed.
+Sending cancellation messages for id 58 failed
+Sending notification failed.
+Sending request failed.
+Sending request failed.
+Sending notification failed.
+Sending notification failed.
+Sending cancellation messages for id 60 failed
+Sending notification failed.
+Sending request failed.
+Sending request failed.
+Sending notification failed.
+Sending cancellation messages for id 61 failed
+Sending request failed.
+Sending notification failed.
+Sending notification failed.
+Sending cancellation messages for id 62 failed
+Sending notification failed.
+Sending cancellation messages for id 63 failed
+Sending notification failed.
+Sending cancellation messages for id 64 failed
+Sending notification failed.
+Sending request failed.
+Sending request failed.
+Sending notification failed.
+Sending notification failed.
+Sending cancellation messages for id 65 failed
+Sending request failed.
+Sending request failed.
+Sending notification failed.
+Sending cancellation messages for id 66 failed
+Sending request failed.
+Sending notification failed.
+Sending notification failed.
+Sending cancellation messages for id 67 failed
+Sending notification failed.
+Sending cancellation messages for id 68 failed
+Sending notification failed.
+Sending cancellation messages for id 69 failed
+Sending notification failed.
+Sending request failed.
+Sending request failed.
+Sending notification failed.
+Sending notification failed.
+Sending cancellation messages for id 70 failed
+Sending request failed.
+Sending request failed.
+Sending notification failed.
+Sending cancellation messages for id 71 failed
+Sending request failed.
+Sending notification failed.
+Sending notification failed.
+Sending cancellation messages for id 72 failed
+Sending notification failed.
+Sending cancellation messages for id 73 failed
+Sending notification failed.
+Sending cancellation messages for id 74 failed
+Sending notification failed.
+Sending notification failed.
+Sending notification failed.
+Sending notification failed.
+Sending request failed.
+Sending request failed.
+Sending request failed.
+Sending notification failed.
+Sending notification failed.
+Sending cancellation messages for id 77 failed
+Sending notification failed.
+Sending cancellation messages for id 75 failed
+Sending notification failed.
+Sending cancellation messages for id 76 failed
+Sending notification failed.
+Sending notification failed.
+Sending notification failed.
+Sending request failed.
+Sending request failed.
+Sending notification failed.
+Sending cancellation messages for id 78 failed
+Sending notification failed.
+Sending cancellation messages for id 79 failed
+Sending notification failed.
+Sending notification failed.
+Sending notification failed.
+Sending request failed.
+Sending request failed.
+Sending notification failed.
+Sending notification failed.
+Sending cancellation messages for id 80 failed
+Sending notification failed.
+Sending cancellation messages for id 81 failed
+Sending notification failed.
+Sending request failed.
+Sending request failed.
+Sending notification failed.
+Sending notification failed.
+Sending cancellation messages for id 82 failed
+Sending request failed.
+rejected promise not handled within 1 second: Error [ERR_STREAM_DESTROYED]: Cannot call write after a stream was destroyed
+stack trace: Error: Cannot call write after a stream was destroyed
+        at _write (node:internal/streams/writable:491:11)
+        at Writable.write (node:internal/streams/writable:510:10)
+        at /Users/david/dev/gren-lsp/editor-extensions/vscode/node_modules/vscode-jsonrpc/lib/node/ril.js:88:29
+        at new Promise (<anonymous>)
+        at WritableStreamWrapper.write (/Users/david/dev/gren-lsp/editor-extensions/vscode/node_modules/vscode-jsonrpc/lib/node/ril.js:78:16)
+        at StreamMessageWriter.doWrite (/Users/david/dev/gren-lsp/editor-extensions/vscode/node_modules/vscode-jsonrpc/lib/common/messageWriter.js:99:33)
+        at /Users/david/dev/gren-lsp/editor-extensions/vscode/node_modules/vscode-jsonrpc/lib/common/messageWriter.js:90:29
+rejected promise not handled within 1 second: Error [ERR_STREAM_DESTROYED]: Cannot call write after a stream was destroyed
+stack trace: Error: Cannot call write after a stream was destroyed
+        at _write (node:internal/streams/writable:491:11)
+        at Writable.write (node:internal/streams/writable:510:10)
+        at /Users/david/dev/gren-lsp/editor-extensions/vscode/node_modules/vscode-jsonrpc/lib/node/ril.js:88:29
+        at new Promise (<anonymous>)
+        at WritableStreamWrapper.write (/Users/david/dev/gren-lsp/editor-extensions/vscode/node_modules/vscode-jsonrpc/lib/node/ril.js:78:16)
+        at StreamMessageWriter.doWrite (/Users/david/dev/gren-lsp/editor-extensions/vscode/node_modules/vscode-jsonrpc/lib/common/messageWriter.js:99:33)
+        at /Users/david/dev/gren-lsp/editor-extensions/vscode/node_modules/vscode-jsonrpc/lib/common/messageWriter.js:90:29
+rejected promise not handled within 1 second: Error [ERR_STREAM_DESTROYED]: Cannot call write after a stream was destroyed
+
+...repeated 50x more times...
+
+rejected promise not handled within 1 second: Error [ERR_STREAM_DESTROYED]: Cannot call write after a stream was destroyed
+stack trace: Error: Cannot call write after a stream was destroyed
+        at _write (node:internal/streams/writable:491:11)
+        at Writable.write (node:internal/streams/writable:510:10)
+        at /Users/david/dev/gren-lsp/editor-extensions/vscode/node_modules/vscode-jsonrpc/lib/node/ril.js:88:29
+        at new Promise (<anonymous>)
+        at WritableStreamWrapper.write (/Users/david/dev/gren-lsp/editor-extensions/vscode/node_modules/vscode-jsonrpc/lib/node/ril.js:78:16)
+        at StreamMessageWriter.doWrite (/Users/david/dev/gren-lsp/editor-extensions/vscode/node_modules/vscode-jsonrpc/lib/common/messageWriter.js:99:33)
+        at /Users/david/dev/gren-lsp/editor-extensions/vscode/node_modules/vscode-jsonrpc/lib/common/messageWriter.js:90:29
+    ✔ should handle server process failure gracefully (13355ms)

@@ -1,0 +1,9 @@
+{
+  "name": "gren-lsp-test-env",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Test environment for Gren LSP with controlled Gren compiler version",
+  "dependencies": {
+    "gren-lang": "0.6.0"
+  }
+}

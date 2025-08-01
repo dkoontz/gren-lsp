@@ -1,7 +1,8 @@
 # Rust build artifacts
-/target/
+target/
 **/*.rs.bk
 *.pdb
+gren-lsp-server/target/test-gren-compiler/node_modules
 
 # Cargo
 Cargo.lock

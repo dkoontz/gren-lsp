@@ -131,6 +131,12 @@ impl Handlers {
         let uri = &params.text_document_position.text_document.uri;
         let position = params.text_document_position.position;
 
+        // Check if the document is open - don't provide completions for non-existent documents
+        if !workspace.is_document_open(uri) {
+            info!("Completion requested for non-open document: {}", uri);
+            return Ok(None);
+        }
+
         // Get symbols from current file
         let mut completion_items = Vec::new();
 
