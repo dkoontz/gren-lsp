@@ -45,15 +45,17 @@ export class GrenCompilerManager {
     // Check if auto-download is enabled
     const autoDownload = config.get<boolean>('compiler.autoDownload', true);
     if (!autoDownload) {
-      this.outputChannel.appendLine(`⚠️ Auto-download disabled, falling back to PATH lookup`);
-      return this.findCompilerInPath();
+      this.outputChannel.appendLine(`❌ Auto-download disabled and no manual compiler path specified`);
+      vscode.window.showErrorMessage('Gren compiler auto-download is disabled. Please specify a manual compiler path in settings or enable auto-download.');
+      return null;
     }
 
     // Try to find and download the compiler version from gren.json
     const requiredVersion = await this.getRequiredGrenVersion();
     if (!requiredVersion) {
-      this.outputChannel.appendLine(`⚠️ No gren.json found, falling back to PATH lookup`);
-      return this.findCompilerInPath();
+      this.outputChannel.appendLine(`❌ No gren.json found in workspace`);
+      vscode.window.showErrorMessage('No gren.json file found in workspace. Cannot determine required Gren compiler version.');
+      return null;
     }
 
     this.outputChannel.appendLine(`🔍 Required Gren version: ${requiredVersion}`);
@@ -79,9 +81,7 @@ export class GrenCompilerManager {
       await config.update('compiler.autoDownload', false, vscode.ConfigurationTarget.Workspace);
       this.outputChannel.appendLine(`⚠️ Auto-download disabled for this workspace due to repeated failures`);
       
-      // Fall back to PATH lookup
-      this.outputChannel.appendLine(`⚠️ Falling back to PATH lookup`);
-      return this.findCompilerInPath();
+      return null;
     }
   }
 
@@ -336,39 +336,6 @@ exec node "${compilerPath}" "$@"
     }
   }
 
-  /**
-   * Find Gren compiler in system PATH as fallback
-   */
-  private findCompilerInPath(): string | null {
-    try {
-      const result = execSync('which gren', { 
-        encoding: 'utf8', 
-        timeout: 3000,
-        stdio: ['ignore', 'pipe', 'pipe'] // Don't inherit stdio to avoid potential hanging
-      });
-      const compilerPath = result.trim();
-      
-      if (fs.existsSync(compilerPath)) {
-        this.outputChannel.appendLine(`✅ Found compiler in PATH: ${compilerPath}`);
-        
-        // Quick verification that it works
-        try {
-          execSync(`"${compilerPath}" --version`, { 
-            encoding: 'utf8', 
-            timeout: 3000,
-            stdio: ['ignore', 'pipe', 'pipe']
-          });
-          return compilerPath;
-        } catch (verifyError) {
-          this.outputChannel.appendLine(`⚠️ Compiler in PATH failed verification: ${verifyError}`);
-        }
-      }
-    } catch (error) {
-      this.outputChannel.appendLine(`❌ Gren compiler not found in PATH: ${error}`);
-    }
-
-    return null;
-  }
 
   /**
    * Get the version of a compiler at a given path

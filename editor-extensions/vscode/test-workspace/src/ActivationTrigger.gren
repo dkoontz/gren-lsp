@@ -1,0 +1,47 @@
+module ActivationTrigger exposing (main)
+
+import Node
+import Stream
+import Bytes exposing (Bytes)
+import Node exposing (Environment, Program)
+import Init
+
+main : Program Model Msg
+main =
+    Node.defineProgram
+        { init = init
+        , update = update
+        , subscriptions = subscriptions
+        }
+
+type alias Model =
+    { stdout : Stream.Writable Bytes
+    , stderr : Stream.Writable Bytes
+    }
+
+type Msg
+    = NoOp
+
+init : Environment -> Init.Task { model : Model, command : Cmd Msg }
+init env =
+    Node.startProgram
+        { model =
+            { stdout = env.stdout
+            , stderr = env.stderr
+            }
+        , command = Cmd.none
+        }
+
+update : Msg -> Model -> { model : Model, command : Cmd Msg }
+update msg model =
+    when msg is
+        NoOp ->
+            { model = model, command = Cmd.none }
+
+subscriptions : Model -> Sub Msg
+subscriptions model =
+    Sub.none
+
+sayHello : String -> String
+sayHello name =
+    "Hello, " ++ name ++ "!"

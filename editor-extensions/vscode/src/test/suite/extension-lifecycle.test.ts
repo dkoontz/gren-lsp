@@ -57,6 +57,10 @@ suite('Extension Lifecycle & Server Management Tests', () => {
 
   afterEach(async () => {
     await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+    
+    // Give a brief moment for any pending operations to settle before stopping monitoring
+    await new Promise(resolve => setTimeout(resolve, 500));
+    
     monitor.stopMonitoring();
   });
 
@@ -236,6 +240,11 @@ useGreet =
       testLogger.verbose('⏳ Step 3: Waiting for client state to change to Stopped...');
       await monitor.waitForClientStateChange(State.Stopped, 15000);
       testLogger.verbose('✅ Client state changed to Stopped');
+      
+      // Give the client additional time to process the failure and clean up pending operations
+      testLogger.verbose('⏳ Allowing client to clean up pending operations...');
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      testLogger.verbose('✅ Client cleanup period completed');
 
       // 4. Attempt operation and verify it fails/times out
       testLogger.verbose('📝 Step 4: Testing LSP behavior after server kill...');

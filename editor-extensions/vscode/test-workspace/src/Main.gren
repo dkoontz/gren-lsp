@@ -1,0 +1,95 @@
+module Main exposing (main)
+
+import Node
+import Stream
+import Bytes exposing (Bytes)
+import Node exposing (Environment, Program)
+import HttpServer as Http exposing (ServerError(..))
+import HttpServer.Response as Response exposing (Response)
+import Init
+import Task
+import Url
+
+
+main : Program Model Msg
+main =
+    Node.defineProgram
+        { init = init
+        , update = update
+        , subscriptions = subscriptions
+        }
+
+
+type alias Model =
+    { stdout : Stream.Writable Bytes
+    , stderr : Stream.Writable Bytes
+    , server : Maybe Http.Server
+    }
+
+
+type Msg
+    = CreateServerResult (Result Http.ServerError Http.Server)
+    | GotRequest { request : Http.Request, response : Response }
+
+
+init : Environment -> Init.Task { model : Model, command : Cmd Msg }
+init env =
+    Init.await Http.initialize <| \serverPermission ->
+        Node.startProgram
+            { model =
+                { stdout = env.stdout
+                , stderr = env.stderr
+                , server = Nothing
+                }
+            , command =
+                Task.attempt CreateServerResult <|
+                    Http.createServer serverPermission
+                        { host = "0.0.0.0"
+                        , port_ = 3000
+                        }
+            }
+
+
+update : Msg -> Model -> { model : Model, command : Cmd Msg }
+update msg model =
+    when msg is
+        CreateServerResult result ->
+            when result is
+                Ok server ->
+                    { model = { model | server = Just server }
+                    , command =
+                        Stream.writeLineAsBytes "Server started" model.stdout
+                           |> Task.onError (\_ -> Task.succeed model.stderr)
+                           |> Task.execute
+                    }
+                Err (ServerError { code, message }) ->
+                    { model = model
+                    , command =
+                        Stream.writeLineAsBytes ("Server failed to start: " ++ code ++ "\n" ++ message) model.stderr
+                          |> Task.onError (\_ -> Task.succeed model.stderr)
+                          |> Task.execute
+                    }
+
+        GotRequest { request = req, response = res } ->
+            let
+                body =
+                    Url.toString req.url
+            in
+            { model = model
+            , command =
+                res
+                    |> Response.setStatus 200
+                    |> Response.setHeader "Content-type" "text/html"
+                    |> Response.setBody ("<html>" ++ body ++ "</html>")
+                    |> Response.send
+            }
+
+
+subscriptions : Model -> Sub Msg
+subscriptions model =
+    when model.server is
+        Just server ->
+            Http.onRequest server (\req res -> GotRequest { request = req, response = res })
+
+        Nothing ->
+            Sub.none

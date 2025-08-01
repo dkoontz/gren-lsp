@@ -5,6 +5,7 @@ use std::process::{Command, Stdio};
 use std::time::SystemTime;
 use tokio::process::Command as AsyncCommand;
 use tracing::{debug, info, warn};
+use tree_sitter::{Query, QueryCursor};
 
 /// Project type as defined in gren.json
 #[derive(Debug, Clone, PartialEq)]
@@ -131,7 +132,49 @@ struct GrenPosition {
 }
 
 impl GrenCompiler {
-    /// Convert a file path to a Gren module name for 0.6.0+ compilation
+    /// Extract module name from Gren source code using tree-sitter
+    /// Parses the "module ModuleName exposing (...)" declaration
+    fn extract_module_name_from_source(&self, content: &str) -> Result<String> {
+        // Create a parser and parse the content
+        let mut parser = crate::parser::Parser::new()?;
+        let tree = parser.parse(content)?.ok_or_else(|| anyhow!("Failed to parse source code"))?;
+        
+        // Create the module query (same as used in symbol extraction)
+        let language = crate::parser::Parser::language();
+        let module_query = Query::new(
+            language,
+            r#"
+            ; Module declarations
+            (module_declaration 
+                (upper_case_qid 
+                    (upper_case_identifier) @module.name)) @module.definition
+        "#,
+        )?;
+        
+        // Execute the query
+        let mut cursor = QueryCursor::new();
+        let source_bytes = content.as_bytes();
+        let matches = cursor.matches(&module_query, tree.root_node(), source_bytes);
+        
+        // Extract the first module name found
+        for m in matches {
+            for capture in m.captures {
+                let capture_name = &module_query.capture_names()[capture.index as usize];
+                if capture_name == "module.name" {
+                    if let Ok(text) = capture.node.utf8_text(source_bytes) {
+                        let module_name = text.to_string();
+                        info!("🔍 Extracted module name from source using tree-sitter: {}", module_name);
+                        return Ok(module_name);
+                    }
+                }
+            }
+        }
+        
+        // If no module declaration found, return an error
+        Err(anyhow!("Could not find module declaration in source code"))
+    }
+    
+    /// Convert a file path to a Gren module name for 0.6.0+ compilation (fallback method)
     /// Examples:
     /// - "src/Main.gren" → "Main"
     /// - "src/Foo/Bar.gren" → "Foo.Bar"
@@ -183,6 +226,7 @@ impl GrenCompiler {
             file_path.display(),
             module_name
         );
+
         Ok(module_name)
     }
 
@@ -456,6 +500,7 @@ impl GrenCompiler {
         &mut self,
         file_path: &Path,
         working_dir: &Path,
+        content: Option<&str>,
     ) -> Result<CompilationResult> {
         let project_type = self.detect_project_type().await?;
 
@@ -499,16 +544,33 @@ impl GrenCompiler {
         info!("🔍 Current working dir: {:?}", std::env::current_dir());
 
         // Convert file path to module name for Gren 0.6.0+ compatibility
-        // For temp directory compilation, we need to determine the module name relative to the temp directory
-        let module_name = if let Some(file_name) = file_path.file_stem() {
-            // For temp compilation, we typically have a single file in the temp src directory
-            // The module name is just the file name without extension
-            file_name.to_string_lossy().to_string()
+        let module_name = if let Some(content) = content {
+            // Extract module name from source code using tree-sitter (preferred method)
+            match self.extract_module_name_from_source(content) {
+                Ok(name) => name,
+                Err(e) => {
+                    warn!("Failed to extract module name from source: {}, falling back to filename", e);
+                    // Fallback to filename-based approach
+                    if let Some(file_name) = file_path.file_stem() {
+                        file_name.to_string_lossy().to_string()
+                    } else {
+                        return Err(anyhow!(
+                            "Could not determine module name from file path: {}",
+                            file_path.display()
+                        ));
+                    }
+                }
+            }
         } else {
-            return Err(anyhow!(
-                "Could not determine module name from temp file path: {}",
-                file_path.display()
-            ));
+            // Fallback: derive module name from file path
+            if let Some(file_name) = file_path.file_stem() {
+                file_name.to_string_lossy().to_string()
+            } else {
+                return Err(anyhow!(
+                    "Could not determine module name from file path: {}",
+                    file_path.display()
+                ));
+            }
         };
 
         info!("🔄 Using module name for temp compilation: {}", module_name);
@@ -834,11 +896,28 @@ impl GrenCompiler {
             original_path
         };
 
-        // Create temp directory structure in OS temp directory
+        // Extract module name from content to create properly named temporary file
+        let module_name = match self.extract_module_name_from_source(content) {
+            Ok(name) => name,
+            Err(e) => {
+                warn!("Failed to extract module name from source: {}, using filename", e);
+                // Fallback to using the original filename without extension
+                original_path
+                    .file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string()
+            }
+        };
+
+        // Create temp directory structure in OS temp directory  
         let temp_base = std::env::temp_dir()
             .join("gren-lsp")
             .join(format!("compile_{}", std::process::id()));
-        let temp_file_path = temp_base.join(relative_path);
+        
+        // Create the temporary file with the correct module name
+        let temp_file_name = format!("{}.gren", module_name);
+        let temp_file_path = temp_base.join(&temp_file_name);
         let temp_dir = temp_file_path.parent().unwrap_or(&temp_base).to_path_buf();
 
         info!(
@@ -898,7 +977,7 @@ impl GrenCompiler {
 
         // Compile the temporary file, running from the .tmp directory
         let mut result = self
-            .run_compiler_in_directory(&temp_file_path, &temp_base)
+            .run_compiler_in_directory(&temp_file_path, &temp_base, Some(content))
             .await;
 
         // Adjust the diagnostic paths to point to the original file
@@ -906,15 +985,15 @@ impl GrenCompiler {
             Ok(mut compilation_result) => {
                 for diagnostic in &mut compilation_result.diagnostics {
                     if let Some(ref mut path) = diagnostic.path {
-                        // Check if the diagnostic path matches the temp file path
-                        // Use canonicalized comparison to handle /var vs /private/var differences on macOS
-                        let paths_match = if let (Ok(canonical_diagnostic), Ok(canonical_temp)) =
-                            (path.canonicalize(), temp_file_path.canonicalize())
+                        // Check if the diagnostic path is within the temp directory structure
+                        // For files in subdirectories like src/, we need to compare properly
+                        let paths_match = if let (Ok(canonical_diagnostic), Ok(canonical_temp_base)) =
+                            (path.canonicalize(), temp_base.canonicalize())
                         {
-                            canonical_diagnostic == canonical_temp
+                            canonical_diagnostic.starts_with(canonical_temp_base)
                         } else {
-                            // Fallback to direct comparison if canonicalization fails
-                            path == &temp_file_path
+                            // Fallback to string-based check if canonicalization fails
+                            path.starts_with(&temp_base)
                         };
 
                         if paths_match {
@@ -930,6 +1009,18 @@ impl GrenCompiler {
                                 path.display(),
                                 temp_file_path.display()
                             );
+                            
+                            // Additional check: if the diagnostic path is within temp_base but for a different file,
+                            // this might be a valid diagnostic that we should map to the original file anyway
+                            // This handles cases where files are in subdirectories like src/
+                            if path.starts_with(&temp_base) {
+                                info!(
+                                    "📍 Diagnostic is within temp directory, mapping to original file anyway: {} -> {}",
+                                    path.display(),
+                                    original_path.display()
+                                );
+                                *path = original_path.to_path_buf();
+                            }
                         }
                     }
                 }

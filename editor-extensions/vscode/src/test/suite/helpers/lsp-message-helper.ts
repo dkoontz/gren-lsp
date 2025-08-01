@@ -34,7 +34,7 @@ export interface LSPNotification extends LSPMessage {
 }
 
 export interface ObservedLSPMessage extends LSPMessage {
-  direction: 'outgoing' | 'incoming';
+  direction: "outgoing" | "incoming";
   messageId?: string | number;
 }
 
@@ -50,7 +50,7 @@ export class ObservedLSPMessageMonitor {
   private isAttached: boolean = false;
 
   constructor() {
-    testLogger.verbose('🔍 LSP message monitor created');
+    testLogger.verbose("🔍 LSP message monitor created");
   }
 
   /**
@@ -59,89 +59,99 @@ export class ObservedLSPMessageMonitor {
   async attachToClient(): Promise<void> {
     // Wait for extension to be ready and get the actual client
     await this.waitForExtensionReady();
-    
+
     const clientOrUndefined = getLanguageClient();
     if (!clientOrUndefined) {
-      throw new Error('❌ Could not get LanguageClient from extension');
+      throw new Error("❌ Could not get LanguageClient from extension");
     }
     this.client = clientOrUndefined;
 
     if (this.client.state !== State.Running) {
-      throw new Error(`❌ LanguageClient is not running (state: ${this.client.state})`);
+      throw new Error(
+        `❌ LanguageClient is not running (state: ${this.client.state})`,
+      );
     }
 
     testLogger.verbose(`✅ Got LanguageClient in state: ${this.client.state}`);
 
     // Store original methods
-    this.originalSendNotification = this.client.sendNotification.bind(this.client);
+    this.originalSendNotification = this.client.sendNotification.bind(
+      this.client,
+    );
     this.originalSendRequest = this.client.sendRequest.bind(this.client);
 
     // Intercept outgoing notifications using a wrapper approach to preserve signatures
     const clientRef = this.client;
     const originalSendNotificationRef = this.originalSendNotification;
     const monitorRef = this;
-    
+
     // Replace sendNotification with interceptor that preserves all overloaded signatures
-    (this.client as any).sendNotification = function(...args: any[]) {
+    (this.client as any).sendNotification = function (...args: any[]) {
       // Extract method name from first argument (could be string or NotificationType)
-      const methodName = typeof args[0] === 'string' ? args[0] : 
-                        args[0]?.method || args[0]?.name || 'unknown';
+      const methodName =
+        typeof args[0] === "string"
+          ? args[0]
+          : args[0]?.method || args[0]?.name || "unknown";
       const params = args[1];
-      
+
       monitorRef.recordMessage({
         method: methodName,
         params: params,
-        direction: 'outgoing',
-        timestamp: Date.now()
+        direction: "outgoing",
+        timestamp: Date.now(),
       });
-      
+
       // Pass through with all original arguments
       return originalSendNotificationRef.apply(clientRef, args);
     };
 
     // Replace sendRequest with interceptor that preserves all overloaded signatures
     const originalSendRequestRef = this.originalSendRequest;
-    (this.client as any).sendRequest = function(...args: any[]) {
+    (this.client as any).sendRequest = function (...args: any[]) {
       // Extract method name from first argument (could be string or RequestType)
-      const methodName = typeof args[0] === 'string' ? args[0] : 
-                        args[0]?.method || args[0]?.name || 'unknown';
+      const methodName =
+        typeof args[0] === "string"
+          ? args[0]
+          : args[0]?.method || args[0]?.name || "unknown";
       const params = args[1];
-      
+
       const messageId = monitorRef.generateMessageId();
       monitorRef.recordMessage({
         method: methodName,
         params: params,
-        direction: 'outgoing',
+        direction: "outgoing",
         messageId: messageId,
-        timestamp: Date.now()
+        timestamp: Date.now(),
       });
-      
+
       // Pass through with all original arguments and track response
       const promise = originalSendRequestRef.apply(clientRef, args);
-      
-      promise.then((result: any) => {
-        monitorRef.recordMessage({
-          method: methodName,
-          result: result,
-          direction: 'incoming',
-          messageId: messageId,
-          timestamp: Date.now()
+
+      promise
+        .then((result: any) => {
+          monitorRef.recordMessage({
+            method: methodName,
+            result: result,
+            direction: "incoming",
+            messageId: messageId,
+            timestamp: Date.now(),
+          });
+        })
+        .catch((error: any) => {
+          monitorRef.recordMessage({
+            method: methodName,
+            error: error,
+            direction: "incoming",
+            messageId: messageId,
+            timestamp: Date.now(),
+          });
         });
-      }).catch((error: any) => {
-        monitorRef.recordMessage({
-          method: methodName,
-          error: error,
-          direction: 'incoming',
-          messageId: messageId,
-          timestamp: Date.now()
-        });
-      });
-      
+
       return promise;
     };
 
     this.isAttached = true;
-    testLogger.verbose('✅ LSP message monitor attached to LanguageClient');
+    testLogger.verbose("✅ LSP message monitor attached to LanguageClient");
   }
 
   /**
@@ -150,10 +160,12 @@ export class ObservedLSPMessageMonitor {
   async startMonitoring(uri: vscode.Uri): Promise<void> {
     this.messages = [];
     testLogger.verbose(`🔍 Started LSP monitoring for ${uri.toString()}`);
-    
+
     // With pre-activation, we should already be attached to the LanguageClient
     if (!this.isAttached) {
-      throw new Error('❌ LSP message monitor not attached - ensure preActivateExtension() was called');
+      throw new Error(
+        "❌ LSP message monitor not attached - ensure preActivateExtension() was called",
+      );
     }
   }
 
@@ -162,43 +174,50 @@ export class ObservedLSPMessageMonitor {
    * This ensures the extension is active and LanguageClient is running before tests
    */
   async preActivateExtension(): Promise<void> {
-    testLogger.verbose('🚀 Pre-activating Gren LSP extension...');
-    
+    testLogger.verbose("🚀 Pre-activating Gren LSP extension...");
+
     // Create a dummy Gren file to trigger extension activation
     const dummyContent = `module ActivationTrigger exposing (..)
 
 -- This file is used to trigger Gren LSP extension activation for testing
 dummy : String
 dummy = "activation trigger"`;
-    
-    const dummyUri = await createTestFileOnDisk(dummyContent, 'activation-trigger.gren');
-    
+
+    const dummyUri = await createTestFileOnDisk(
+      dummyContent,
+      "ActivationTrigger.gren",
+    );
+
     try {
       // Open the dummy file to trigger extension activation
-      testLogger.verbose('📁 Opening dummy file to trigger extension activation...');
+      testLogger.verbose(
+        "📁 Opening dummy file to trigger extension activation...",
+      );
       await openFileInEditor(dummyUri);
-      
+
       // Wait for extension to fully activate and LanguageClient to start
-      testLogger.verbose('⏳ Waiting for extension activation and LanguageClient startup...');
+      testLogger.verbose(
+        "⏳ Waiting for extension activation and LanguageClient startup...",
+      );
       await this.waitForExtensionReady();
-      
-      testLogger.verbose('✅ Extension pre-activation completed successfully');
-      
+
+      testLogger.verbose("✅ Extension pre-activation completed successfully");
     } finally {
       // Clean up dummy file and close editors
-      testLogger.verbose('🧹 Cleaning up activation trigger file...');
-      await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+      testLogger.verbose("🧹 Cleaning up activation trigger file...");
+      await vscode.commands.executeCommand("workbench.action.closeAllEditors");
       await cleanupTestFile(dummyUri);
     }
   }
-
 
   /**
    * Record an LSP message
    */
   private recordMessage(message: ObservedLSPMessage): void {
     this.messages.push(message);
-    testLogger.verbose(`  LSP message: ${message.method} (${message.direction})`);
+    testLogger.verbose(
+      `  LSP message: ${message.method} (${message.direction})`,
+    );
   }
 
   /**
@@ -211,42 +230,50 @@ dummy = "activation trigger"`;
   /**
    * Wait for extension to be ready (compatibility method)
    */
-  private async waitForExtensionReady(timeoutMs: number = LSP_EXTENSION_READY_TIMEOUT): Promise<void> {
+  private async waitForExtensionReady(
+    timeoutMs: number = LSP_EXTENSION_READY_TIMEOUT,
+  ): Promise<void> {
     const startTime = Date.now();
-    testLogger.verbose('⏳ Waiting for Gren LSP extension and client to be ready...');
-    
+    testLogger.verbose(
+      "⏳ Waiting for Gren LSP extension and client to be ready...",
+    );
+
     while (Date.now() - startTime < timeoutMs) {
-      const extension = vscode.extensions.getExtension('gren-lsp.gren-lsp');
-      testLogger.verbose(`🔍 Extension found: ${!!extension}, isActive: ${extension?.isActive}`);
-      
+      const extension = vscode.extensions.getExtension("gren-lsp.gren-lsp");
+      testLogger.verbose(
+        `🔍 Extension found: ${!!extension}, isActive: ${extension?.isActive}`,
+      );
+
       if (extension && extension.isActive) {
         const client = getLanguageClient();
-        testLogger.verbose(`🔍 Client found: ${!!client}, state: ${client?.state}`);
-        
+        testLogger.verbose(
+          `🔍 Client found: ${!!client}, state: ${client?.state}`,
+        );
+
         if (client && client.state === State.Running) {
-          testLogger.verbose('✅ Extension and client are ready!');
+          testLogger.verbose("✅ Extension and client are ready!");
           return;
         } else if (client) {
           testLogger.verbose(`⏳ Client state is ${client.state}, waiting...`);
         }
       } else if (extension) {
-        testLogger.verbose('⏳ Extension found but not active, waiting...');
+        testLogger.verbose("⏳ Extension found but not active, waiting...");
       } else {
-        testLogger.verbose('❌ Extension not found');
+        testLogger.verbose("❌ Extension not found");
       }
-      
-      await new Promise(resolve => setTimeout(resolve, 500));
+
+      await new Promise((resolve) => setTimeout(resolve, 500));
     }
-    
+
     // Provide detailed error information
-    const extension = vscode.extensions.getExtension('gren-lsp.gren-lsp');
+    const extension = vscode.extensions.getExtension("gren-lsp.gren-lsp");
     const client = getLanguageClient();
     throw new Error(
       `Timeout waiting for Gren LSP extension and client to be ready after ${timeoutMs}ms. ` +
-      `Extension: ${extension ? 'found' : 'not found'}, ` +
-      `Active: ${extension?.isActive}, ` +
-      `Client: ${client ? 'found' : 'not found'}, ` +
-      `State: ${client?.state || 'N/A'}`
+        `Extension: ${extension ? "found" : "not found"}, ` +
+        `Active: ${extension?.isActive}, ` +
+        `Client: ${client ? "found" : "not found"}, ` +
+        `State: ${client?.state || "N/A"}`,
     );
   }
 
@@ -261,7 +288,7 @@ dummy = "activation trigger"`;
    * Get messages of a specific method
    */
   getMessagesForMethod(method: string): ObservedLSPMessage[] {
-    return this.messages.filter(msg => msg.method === method);
+    return this.messages.filter((msg) => msg.method === method);
   }
 
   /**
@@ -275,26 +302,33 @@ dummy = "activation trigger"`;
   /**
    * Wait for a specific LSP method to be called (compatibility method)
    */
-  async waitForMethod(method: string, timeoutMs: number = LSP_RESPONSE_TIMEOUT): Promise<ObservedLSPMessage> {
+  async waitForMethod(
+    method: string,
+    timeoutMs: number = LSP_RESPONSE_TIMEOUT,
+  ): Promise<ObservedLSPMessage> {
     const startTime = Date.now();
-    
+
     while (Date.now() - startTime < timeoutMs) {
       const message = this.getLastMessageForMethod(method);
       if (message) {
         return message;
       }
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise((resolve) => setTimeout(resolve, 100));
     }
-    
-    throw new Error(`Timeout waiting for LSP method: ${method}. Captured methods: ${this.getMethodsList()}`);
+
+    throw new Error(
+      `Timeout waiting for LSP method: ${method}. Captured methods: ${this.getMethodsList()}`,
+    );
   }
 
   /**
    * Get list of all captured method names
    */
   private getMethodsList(): string {
-    const methods = [...new Set(this.messages.map(msg => `${msg.method}(${msg.direction})`))];
-    return methods.join(', ');
+    const methods = [
+      ...new Set(this.messages.map((msg) => `${msg.method}(${msg.direction})`)),
+    ];
+    return methods.join(", ");
   }
 
   /**
@@ -308,7 +342,9 @@ dummy = "activation trigger"`;
    * Stop monitoring and clean up
    */
   stopMonitoring(): void {
-    testLogger.verbose(`🛑 Stopped LSP monitoring. Captured ${this.messages.length} messages`);
+    testLogger.verbose(
+      `🛑 Stopped LSP monitoring. Captured ${this.messages.length} messages`,
+    );
   }
 
   /**
@@ -317,23 +353,23 @@ dummy = "activation trigger"`;
   async killServerProcess(): Promise<void> {
     const client = getLanguageClient();
     if (!client) {
-      throw new Error('❌ No LanguageClient available to kill server process');
+      throw new Error("❌ No LanguageClient available to kill server process");
     }
 
     const serverProcess = (client as any)._serverProcess;
     if (!serverProcess) {
-      throw new Error('❌ No server process found in LanguageClient');
+      throw new Error("❌ No server process found in LanguageClient");
     }
 
     const pid = serverProcess.pid;
     if (!pid) {
-      throw new Error('❌ Server process has no PID');
+      throw new Error("❌ Server process has no PID");
     }
 
     testLogger.verbose(`🔪 Killing LSP server process ${pid}...`);
-    
+
     try {
-      process.kill(pid, 'SIGKILL');
+      process.kill(pid, "SIGKILL");
       testLogger.verbose(`✅ Successfully killed LSP server process ${pid}`);
     } catch (error) {
       throw new Error(`❌ Failed to kill server process ${pid}: ${error}`);
@@ -343,35 +379,50 @@ dummy = "activation trigger"`;
   /**
    * Wait for LanguageClient to change to a specific state
    */
-  async waitForClientStateChange(expectedState: State, timeoutMs: number = 10000): Promise<void> {
+  async waitForClientStateChange(
+    expectedState: State,
+    timeoutMs: number = 10000,
+  ): Promise<void> {
     const client = getLanguageClient();
     if (!client) {
-      throw new Error('❌ No LanguageClient available to monitor state');
+      throw new Error("❌ No LanguageClient available to monitor state");
     }
 
     const startTime = Date.now();
-    testLogger.verbose(`⏳ Waiting for client state change to ${this.getStateName(expectedState)}...`);
+    testLogger.verbose(
+      `⏳ Waiting for client state change to ${this.getStateName(expectedState)}...`,
+    );
 
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
-        reject(new Error(`Timeout waiting for client state ${this.getStateName(expectedState)} after ${timeoutMs}ms. Current state: ${this.getStateName(client.state)}`));
+        reject(
+          new Error(
+            `Timeout waiting for client state ${this.getStateName(expectedState)} after ${timeoutMs}ms. Current state: ${this.getStateName(client.state)}`,
+          ),
+        );
       }, timeoutMs);
 
       // Check if already in expected state
       if (client.state === expectedState) {
         clearTimeout(timeout);
-        testLogger.verbose(`✅ Client already in state ${this.getStateName(expectedState)}`);
+        testLogger.verbose(
+          `✅ Client already in state ${this.getStateName(expectedState)}`,
+        );
         resolve();
         return;
       }
 
       const disposable = client.onDidChangeState((stateChange) => {
-        testLogger.verbose(`🔄 Client state changed: ${this.getStateName(stateChange.oldState)} → ${this.getStateName(stateChange.newState)}`);
-        
+        testLogger.verbose(
+          `🔄 Client state changed: ${this.getStateName(stateChange.oldState)} → ${this.getStateName(stateChange.newState)}`,
+        );
+
         if (stateChange.newState === expectedState) {
           clearTimeout(timeout);
           disposable.dispose();
-          testLogger.verbose(`✅ Client reached expected state ${this.getStateName(expectedState)}`);
+          testLogger.verbose(
+            `✅ Client reached expected state ${this.getStateName(expectedState)}`,
+          );
           resolve();
         }
       });
@@ -382,11 +433,11 @@ dummy = "activation trigger"`;
    * Reload the VS Code window to reset extension state
    */
   async reloadWindow(): Promise<void> {
-    testLogger.verbose('🔄 Reloading VS Code window for extension reset...');
-    testLogger.verbose('⚠️ Test execution will stop here due to window reload');
-    
+    testLogger.verbose("🔄 Reloading VS Code window for extension reset...");
+    testLogger.verbose("⚠️ Test execution will stop here due to window reload");
+
     // Execute the reload command - this will stop execution as the window reloads
-    await vscode.commands.executeCommand('workbench.action.reloadWindow');
+    await vscode.commands.executeCommand("workbench.action.reloadWindow");
   }
 
   /**
@@ -394,10 +445,14 @@ dummy = "activation trigger"`;
    */
   private getStateName(state: State): string {
     switch (state) {
-      case State.Stopped: return 'Stopped';
-      case State.Starting: return 'Starting';
-      case State.Running: return 'Running';
-      default: return `Unknown(${state})`;
+      case State.Stopped:
+        return "Stopped";
+      case State.Starting:
+        return "Starting";
+      case State.Running:
+        return "Running";
+      default:
+        return `Unknown(${state})`;
     }
   }
 
@@ -413,16 +468,15 @@ dummy = "activation trigger"`;
       if (this.originalSendRequest) {
         (this.client as any).sendRequest = this.originalSendRequest;
       }
-      testLogger.verbose('✅ Restored original LanguageClient methods');
+      testLogger.verbose("✅ Restored original LanguageClient methods");
     }
-    
+
     this.isAttached = false;
     this.client = null;
     this.originalSendNotification = null;
     this.originalSendRequest = null;
   }
 }
-
 
 /**
  * Helper function to close all open editors and documents
@@ -474,7 +528,6 @@ export async function createTestFileOnDisk(
 
   return testUri;
 }
-
 
 /**
  * Helper function to open a file that exists on disk (triggers real textDocument/didOpen)
