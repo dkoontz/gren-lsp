@@ -1,0 +1,126 @@
+{
+  "name": "Initialize Server",
+  "description": "Basic server initialization sequence with capability negotiation",
+  "setup_required": [],
+  "cleanup_required": [],
+  "messages": [
+    {
+      "sender": "client",
+      "message": "initialize",
+      "contents": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+          "processId": 12345,
+          "clientInfo": {
+            "name": "test-client",
+            "version": "1.0.0"
+          },
+          "rootUri": "{{TEST_PROJECT_ROOT}}",
+          "capabilities": {
+            "textDocument": {
+              "synchronization": {
+                "dynamicRegistration": false,
+                "willSave": false,
+                "willSaveWaitUntil": false,
+                "didSave": false
+              },
+              "completion": {
+                "dynamicRegistration": false,
+                "completionItem": {
+                  "snippetSupport": true,
+                  "commitCharactersSupport": false,
+                  "documentationFormat": ["markdown", "plaintext"],
+                  "deprecatedSupport": false,
+                  "preselectSupport": false
+                }
+              },
+              "hover": {
+                "dynamicRegistration": false,
+                "contentFormat": ["markdown", "plaintext"]
+              },
+              "definition": {
+                "dynamicRegistration": false,
+                "linkSupport": true
+              },
+              "references": {
+                "dynamicRegistration": false
+              },
+              "documentSymbol": {
+                "dynamicRegistration": false,
+                "symbolKind": {
+                  "valueSet": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26]
+                }
+              }
+            },
+            "workspace": {
+              "applyEdit": false,
+              "workspaceEdit": {
+                "documentChanges": false
+              },
+              "didChangeConfiguration": {
+                "dynamicRegistration": false
+              },
+              "didChangeWatchedFiles": {
+                "dynamicRegistration": false
+              }
+            }
+          },
+          "trace": "off"
+        }
+      }
+    },
+    {
+      "sender": "server",
+      "message": "initialize_response",
+      "contents": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "capabilities": {
+            "textDocumentSync": {
+              "openClose": true,
+              "change": 2,
+              "willSave": false,
+              "willSaveWaitUntil": false,
+              "save": {
+                "includeText": false
+              }
+            },
+            "completionProvider": {
+              "resolveProvider": false,
+              "triggerCharacters": ["."]
+            },
+            "hoverProvider": true,
+            "definitionProvider": true,
+            "referencesProvider": true,
+            "documentSymbolProvider": true,
+            "workspaceSymbolProvider": false,
+            "codeActionProvider": false,
+            "codeLensProvider": null,
+            "documentFormattingProvider": false,
+            "documentRangeFormattingProvider": false,
+            "renameProvider": false,
+            "documentLinkProvider": null,
+            "executeCommandProvider": null,
+            "experimental": null
+          },
+          "serverInfo": {
+            "name": "gren-lsp",
+            "version": "0.1.0"
+          }
+        }
+      }
+    },
+    {
+      "sender": "client",
+      "message": "initialized",
+      "contents": {
+        "jsonrpc": "2.0",
+        "method": "initialized",
+        "params": {}
+      }
+    }
+  ]
+}

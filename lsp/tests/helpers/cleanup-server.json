@@ -1,0 +1,35 @@
+{
+  "name": "Cleanup Server",
+  "description": "Gracefully shutdown the LSP server",
+  "setup_required": [],
+  "cleanup_required": [],
+  "messages": [
+    {
+      "sender": "client",
+      "message": "shutdown",
+      "contents": {
+        "jsonrpc": "2.0",
+        "id": 999,
+        "method": "shutdown",
+        "params": null
+      }
+    },
+    {
+      "sender": "server",
+      "message": "shutdown_response",
+      "contents": {
+        "jsonrpc": "2.0",
+        "id": 999,
+        "result": null
+      }
+    },
+    {
+      "sender": "client",
+      "message": "exit",
+      "contents": {
+        "jsonrpc": "2.0",
+        "method": "exit"
+      }
+    }
+  ]
+}

@@ -1,0 +1,63 @@
+{
+  "name": "Module Member Completion",
+  "description": "Test completion suggestions after typing 'Html.' in import context",
+  "setup_required": ["initialize-server", "open-main-gren"],
+  "cleanup_required": ["cleanup-server"],
+  "messages": [
+    {
+      "sender": "client",
+      "message": "textDocument/completion",
+      "contents": {
+        "jsonrpc": "2.0",
+        "id": 10,
+        "method": "textDocument/completion",
+        "params": {
+          "textDocument": {
+            "uri": "{{TEST_PROJECT_ROOT}}/src/Main.gren"
+          },
+          "position": {
+            "line": 2,
+            "character": 17
+          },
+          "context": {
+            "triggerKind": 2,
+            "triggerCharacter": "."
+          }
+        }
+      }
+    },
+    {
+      "sender": "server",
+      "message": "completion_response",
+      "contents": {
+        "jsonrpc": "2.0",
+        "id": 10,
+        "result": {
+          "isIncomplete": false,
+          "items": [
+            {
+              "label": "text",
+              "kind": 3,
+              "detail": "String -> Html msg",
+              "documentation": {
+                "kind": "markdown",
+                "value": "Create a text node with the given content."
+              },
+              "insertText": "text"
+            },
+            {
+              "label": "div",
+              "kind": 3,
+              "detail": "Array (Attribute msg) -> Array (Html msg) -> Html msg",
+              "documentation": {
+                "kind": "markdown",
+                "value": "Create a div element."
+              },
+              "insertText": "div"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

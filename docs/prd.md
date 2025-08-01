@@ -205,16 +205,16 @@ Gren is a pure functional programming language forked from Elm, featuring:
 ### Phase 1: Foundation (MVP)
 **Timeline**: 4-6 weeks
 **Deliverables**:
+- Tree-sitter baseline AST capture and documentation (prerequisite)
 - Basic LSP server lifecycle (initialize, shutdown, exit)
 - Document synchronization (didOpen, didChange, didClose)
 - Basic diagnostics from compiler output
 - Tree-sitter integration for parsing
-- VS Code extension integration
 
 **Success Criteria**:
+- Complete AST baseline captured and documented in `docs/tree-sitter-ast/`
 - Server starts and shuts down correctly
 - Documents sync properly with no data loss
-- Syntax errors displayed in editor
 - No crashes during normal operation
 
 ### Phase 2: Core Language Features
@@ -258,6 +258,20 @@ Gren is a pure functional programming language forked from Elm, featuring:
 - Workspace search finds symbols quickly
 - Rename works safely across project
 - Documentation supports user adoption
+
+### Phase 5: VS Code Extension Integration
+**Timeline**: 2-3 weeks
+**Deliverables**:
+- VS Code extension package
+- Extension marketplace publication
+- User installation guide
+- Extension configuration options
+
+**Success Criteria**:
+- Extension installs and activates correctly
+- LSP server starts automatically when opening Gren files
+- All language features work seamlessly in VS Code
+- User-friendly configuration interface
 
 ## Risk Assessment
 

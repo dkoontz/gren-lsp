@@ -1,0 +1,49 @@
+{
+  "name": "Go to Local Definition",
+  "description": "Navigate to a function definition within the same file",
+  "setup_required": ["initialize-server", "open-utils-gren"],
+  "cleanup_required": ["cleanup-server"],
+  "messages": [
+    {
+      "sender": "client",
+      "message": "textDocument/definition",
+      "contents": {
+        "jsonrpc": "2.0",
+        "id": 31,
+        "method": "textDocument/definition",
+        "params": {
+          "textDocument": {
+            "uri": "{{TEST_PROJECT_ROOT}}/src/Utils.gren"
+          },
+          "position": {
+            "line": 12,
+            "character": 15
+          }
+        }
+      }
+    },
+    {
+      "sender": "server",
+      "message": "definition_response",
+      "contents": {
+        "jsonrpc": "2.0",
+        "id": 31,
+        "result": [
+          {
+            "uri": "{{TEST_PROJECT_ROOT}}/src/Utils.gren",
+            "range": {
+              "start": {
+                "line": 5,
+                "character": 0
+              },
+              "end": {
+                "line": 5,
+                "character": 6
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

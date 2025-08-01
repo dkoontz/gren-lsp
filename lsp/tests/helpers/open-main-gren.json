@@ -1,0 +1,24 @@
+{
+  "name": "Open Main.gren",
+  "description": "Open the main Gren file with standard test content",
+  "setup_required": [],
+  "cleanup_required": [],
+  "messages": [
+    {
+      "sender": "client",
+      "message": "textDocument/didOpen",
+      "contents": {
+        "jsonrpc": "2.0",
+        "method": "textDocument/didOpen",
+        "params": {
+          "textDocument": {
+            "uri": "{{TEST_PROJECT_ROOT}}/src/Main.gren",
+            "languageId": "gren",
+            "version": 1,
+            "text": "module Main exposing (main)\n\nimport Html exposing (text)\n\nmain =\n    text \"Hello, Gren!\"\n"
+          }
+        }
+      }
+    }
+  ]
+}

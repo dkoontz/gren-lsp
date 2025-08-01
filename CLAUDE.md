@@ -36,6 +36,8 @@ The LSP spec is available in the `.docs/lsp-spec/3.18` folder. The documentation
 - Small, predictable syntax ideal for tree-sitter parsing
 - **Deterministic imports**: Explicit import statements with no ambiguity - each symbol has exactly one source
 - **No polymorphic overloading**: Function names are unique within their scope, enabling precise symbol resolution
+- **No tuples**: Gren uses records instead of tuples. Where Elm uses `( Model, Cmd Msg )`, Gren uses `{ model : Model, command : Cmd Msg }`
+- **Pattern matching**: Uses `when` keyword instead of `case` for pattern matching expressions
 
 ### Performance Considerations
 - Uses LRU caching for workspace documents (default 100 items)

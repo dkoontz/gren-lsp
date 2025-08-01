@@ -1,0 +1,719 @@
+module TreeSitterReference exposing (..)
+
+{-| Comprehensive Gren reference file for tree-sitter AST baseline.
+This file exercises all language constructs to ensure complete AST coverage.
+
+Used for generating the baseline AST structure that guides LSP implementation.
+-}
+
+import Array exposing (..)
+import Dict exposing (Dict)
+import Set exposing (Set)
+import Http
+import Json.Decode as Decode
+import Json.Encode as Encode
+import Math
+import Platform exposing (Program)
+import Platform.Cmd as Cmd exposing (Cmd)
+import Platform.Sub as Sub exposing (Sub)
+
+
+-- MODULE DECLARATIONS AND IMPORTS (various forms)
+-- ============================================
+
+-- Standard imports
+-- Qualified imports
+-- Exposing specific items
+-- Exposing all items
+
+
+
+-- TYPE DEFINITIONS
+-- ===============
+
+-- Custom type with variants
+type UserStatus
+    = Anonymous
+    | LoggedIn { username : String, sessionId : Int }
+    | Premium { name : String, level : Int }
+    | Admin String
+
+
+-- Record type alias
+type alias User =
+    { id : Int
+    , name : String
+    , email : String
+    , status : UserStatus
+    , metadata : Dict String String
+    }
+
+
+-- Generic type
+type Enum error value
+    = First value
+    | Second error
+
+
+-- Recursive type
+type Tree a
+    = Empty
+    | Leaf { value : a, left : Tree a, right : Tree a }
+
+
+-- Opaque type
+type UserId
+    = UserId Int
+
+
+
+-- FUNCTION DEFINITIONS
+-- ===================
+
+-- Function with type annotation
+factorial : Int -> Int
+factorial n =
+    if n <= 1 then
+        1
+    else
+        n * factorial (n - 1)
+
+
+-- Function with multiple parameters
+add : Int -> Int -> Int
+add x y =
+    x + y
+
+
+-- Function with record parameter
+getUserName : User -> String
+getUserName user =
+    user.name
+
+
+-- Function with pattern matching
+processStatus : UserStatus -> String
+processStatus status =
+    when status is
+        Anonymous ->
+            "Guest user"
+
+        LoggedIn { username, sessionId } ->
+            "User: " ++ username ++ " (Session " ++ String.fromInt sessionId ++ ")"
+
+        Premium { name, level } ->
+            "Premium user: " ++ name ++ " at level " ++ String.fromInt level
+
+        Admin adminName ->
+            "Administrator: " ++ adminName
+
+
+-- Function with guards
+classifyNumber : Int -> String
+classifyNumber n =
+    when n is
+        x ->
+            if x < 0 then
+                "negative"
+            else if x == 0 then
+                "zero"
+            else
+                "positive"
+
+
+-- Higher-order functions
+applyTwice : (a -> a) -> a -> a
+applyTwice fn value =
+    fn (fn value)
+
+
+-- Lambda expressions
+mapDouble : Array Int -> Array Int
+mapDouble numbers =
+    Array.map (\x -> x * 2) numbers
+
+
+-- Curried function application
+addOne : Int -> Int
+addOne =
+    add 1
+
+
+-- Function composition (if available)
+processUser : User -> String
+processUser =
+    getUserName >> String.toUpper
+
+
+
+-- LET EXPRESSIONS AND LOCAL BINDINGS
+-- =================================
+
+calculateDistance : Float -> Float -> Float -> Float
+calculateDistance x1 y1 z1 =
+    let
+        x2 = 0.0
+        y2 = 0.0
+        z2 = 0.0
+
+        dx = x2 - x1
+        dy = y2 - y1
+        dz = z2 - z1
+
+        squaredDistance =
+            dx * dx + dy * dy + dz * dz
+    in
+    Math.sqrt squaredDistance
+
+
+-- Nested let expressions
+complexCalculation : Int -> Int
+complexCalculation input =
+    let
+        step1 =
+            let
+                doubled = input * 2
+                tripled = input * 3
+            in
+            doubled + tripled
+
+        step2 = step1 * step1
+    in
+    step1 + step2
+
+
+
+-- WHEN EXPRESSIONS AND PATTERN MATCHING
+-- ====================================
+
+-- Pattern matching on custom types
+handleResult : Result String Int -> String
+handleResult result =
+    when result is
+        Ok value ->
+            "Success: " ++ String.fromInt value
+
+        Err error ->
+            "Error: " ++ error
+
+
+-- Pattern matching on arrays
+processArray : Array Int -> String
+processArray arr =
+    when Array.get 0 arr is
+        Nothing ->
+            "Empty array"
+
+        Just first ->
+            when Array.get 1 arr is
+                Nothing ->
+                    "Single item: " ++ String.fromInt first
+
+                Just second ->
+                    "First two: " ++ String.fromInt first ++ ", " ++ String.fromInt second
+
+
+-- Pattern matching with destructuring
+processCoordinates : { x : Float, y : Float } -> Float
+processCoordinates { x, y } =
+    Math.sqrt (x * x + y * y)
+
+
+-- Wildcard patterns
+ignoreFirst : Array a -> Array a
+ignoreFirst arr =
+    when Array.length arr is
+        0 ->
+            arr
+
+        _ ->
+            Array.dropFirst 1 arr
+
+
+
+-- RECORD OPERATIONS
+-- ================
+
+-- Record creation
+createUser : String -> String -> User
+createUser name email =
+    { id = 0
+    , name = name
+    , email = email
+    , status = Anonymous
+    , metadata = Dict.empty
+    }
+
+
+-- Record update
+updateUserStatus : UserStatus -> User -> User
+updateUserStatus newStatus user =
+    { user | status = newStatus }
+
+
+-- Multiple field update
+updateUserInfo : String -> String -> User -> User
+updateUserInfo newName newEmail user =
+    { user
+        | name = newName
+        , email = newEmail
+    }
+
+
+-- Record field access
+getUserEmail : User -> String
+getUserEmail user =
+    user.email
+
+
+
+-- OPERATORS AND PRECEDENCE
+-- =======================
+
+-- Arithmetic operators
+mathOperations : Int -> Int -> Int
+mathOperations a b =
+    let
+        addition = a + b
+        subtraction = a - b
+        multiplication = a * b
+        division = a // b
+        modulo = Math.modBy b a
+        power = a ^ b
+        negation = -a
+    in
+    addition + subtraction * multiplication // division + modulo ^ power
+
+
+-- Comparison operators
+comparisons : Int -> Int -> Array Bool
+comparisons a b =
+    [ a == b
+    , a /= b
+    , a < b
+    , a <= b
+    , a > b
+    , a >= b
+    ]
+
+
+-- Logical operators
+logicalOperations : Bool -> Bool -> Array Bool
+logicalOperations p q =
+    [ p && q
+    , p || q
+    , not p
+    ]
+
+
+-- String operators
+stringOperations : String -> String -> String
+stringOperations s1 s2 =
+    s1 ++ " " ++ s2
+
+
+-- Pipe operators
+pipeExample : Array Int -> Int
+pipeExample numbers =
+    numbers
+        |> Array.map (\x -> x * x)
+        |> Array.keepIf (\x -> x > 10)
+        |> Array.length
+
+
+-- Function composition (if available)
+compositionExample : Array String -> Array String
+compositionExample =
+    Array.map String.trim >> Array.keepIf (not << String.isEmpty)
+
+
+
+-- LITERALS
+-- =======
+
+-- Integer literals
+integerLiterals : Array Int
+integerLiterals =
+    [ 42
+    , -17
+    , 0
+    , 1000000
+    ]
+
+
+-- Hexadecimal literals (if supported)
+hexLiterals : Array Int
+hexLiterals =
+    [ 0xFF
+    , 0x00
+    , 0x123ABC
+    ]
+
+
+-- Float literals
+floatLiterals : Array Float
+floatLiterals =
+    [ 3.14159
+    , -2.5
+    , 0.0
+    , 1.0e10
+    , -1.5e-3
+    ]
+
+
+-- String literals
+stringLiterals : Array String
+stringLiterals =
+    [ "Hello, World!"
+    , "Line 1\nLine 2"
+    , "Tab\there"
+    , "Quote: \"Hello\""
+    , "Backslash: \\"
+    , ""
+    ]
+
+
+-- Character literals (if supported)
+charLiterals : Array Char
+charLiterals =
+    [ 'a'
+    , 'Z'
+    , '0'
+    , ' '
+    , '\n'
+    , '\t'
+    ]
+
+
+-- Boolean literals
+boolLiterals : Array Bool
+boolLiterals =
+    [ True
+    , False
+    ]
+
+
+
+-- ARRAY OPERATIONS
+-- ===============
+
+-- Array literal
+arrayLiteral : Array Int
+arrayLiteral =
+    [ 1, 2, 3, 4, 5 ]
+
+
+-- Array operations
+arrayOperations : Array Int -> Array Int
+arrayOperations input =
+    let
+        mapped = Array.map (\x -> x * 2) input
+        filtered = Array.keepIf (\x -> x > 5) mapped
+        indexed = Array.indexedMap (\i x -> i + x) filtered
+    in
+    indexed
+
+
+-- Array destructuring
+firstTwo : Array a -> Maybe { first: a, second: a }
+firstTwo arr =
+    when { first = Array.get 0 arr, second = Array.get 1 arr } is
+        { first = Just first, second = Just second } ->
+            Just { first = first, second = second }
+
+        _ ->
+            Nothing
+
+
+
+-- COMMENTS
+-- =======
+
+{-| Module documentation comment.
+This demonstrates multi-line documentation comments.
+
+# Examples
+
+    TreeSitterReference.factorial 5
+    --> 120
+
+# Notes
+- This is a bullet point
+- This is another bullet point
+-}
+
+
+-- Single-line comment
+singleLineComment : Int
+singleLineComment =
+    42 -- inline comment
+
+
+{- Multi-line comment
+   spanning multiple lines
+   with various content
+-}
+multiLineComment : String
+multiLineComment =
+    "test"
+
+
+{-
+Nested {- comment -} blocks
+should be handled correctly
+-}
+
+
+
+-- ADVANCED PATTERNS
+-- =================
+
+-- Record destructuring
+swapRecord : { first: a, second: b } -> { first : b, second : a }
+swapRecord { first, second } =
+    { second = first, first = second }
+
+
+-- Nested pattern matching
+processNestedData : Array (Array Int) -> Int
+processNestedData matrix =
+    when Array.get 0 matrix is
+        Nothing ->
+            0
+
+        Just firstRow ->
+            when Array.get 0 firstRow is
+                Nothing ->
+                    0
+
+                Just firstElement ->
+                    firstElement
+
+
+-- As patterns (if supported)
+processUserWithBackup : User -> String
+processUserWithBackup user =
+    when user.status is
+        LoggedIn { username } as loggedInStatus ->
+            "Processing logged in user: " ++ username
+
+        other ->
+            "Processing other user type"
+
+
+
+-- IF-THEN-ELSE EXPRESSIONS
+-- =======================
+
+-- Simple if-then-else
+simpleIf : Int -> String
+simpleIf n =
+    if n > 0 then
+        "positive"
+    else
+        "non-positive"
+
+
+-- Nested if-then-else
+nestedIf : Int -> String
+nestedIf n =
+    if n > 0 then
+        if n > 100 then
+            "large positive"
+        else
+            "small positive"
+    else if n < 0 then
+        "negative"
+    else
+        "zero"
+
+
+-- If-then-else in expressions
+conditionalValue : Bool -> Int
+conditionalValue condition =
+    (if condition then 1 else 0) + 5
+
+
+
+-- MAIN FUNCTION AND PROGRAM
+-- ========================
+
+-- Main function for program
+main : Program {} Model Msg
+main =
+    Platform.worker
+        { init = init
+        , update = update
+        , subscriptions = subscriptions
+        }
+
+
+-- Model
+type alias Model =
+    { users : Array User
+    , currentUser : Maybe User
+    , loading : Bool
+    }
+
+
+-- Messages
+type Msg
+    = LoadUsers
+    | UsersLoaded (Result Http.Error (Array User))
+    | SelectUser User
+    | ClearSelection
+
+
+-- Init
+init : {} -> { model : Model, command : Cmd Msg }
+init _ =
+    { model =
+        { users = []
+        , currentUser = Nothing
+        , loading = False
+        }
+    , command = Cmd.none
+    }
+
+
+-- Update
+update : Msg -> Model -> { model : Model, command : Cmd Msg }
+update msg model =
+    when msg is
+        LoadUsers ->
+            { model = { model | loading = True }
+            , command = loadUsers
+            }
+
+        UsersLoaded (Ok users) ->
+            { model =
+                { model
+                    | users = users
+                    , loading = False
+                }
+            , command = Cmd.none
+            }
+
+        UsersLoaded (Err _) ->
+            { model = { model | loading = False }
+            , command = Cmd.none
+            }
+
+        SelectUser user ->
+            { model = { model | currentUser = Just user }
+            , command = Cmd.none
+            }
+
+        ClearSelection ->
+            { model = { model | currentUser = Nothing }
+            , command = Cmd.none
+            }
+
+
+-- Subscriptions
+subscriptions : Model -> Sub Msg
+subscriptions _ =
+    Sub.none
+
+
+-- HTTP command
+loadUsers : Cmd Msg
+loadUsers =
+    Http.get
+        { url = "/api/users"
+        , expect = Http.expectJson UsersLoaded usersDecoder
+        }
+
+
+-- JSON decoders
+usersDecoder : Decode.Decoder (Array User)
+usersDecoder =
+    Decode.array userDecoder
+
+
+userDecoder : Decode.Decoder User
+userDecoder =
+    Decode.map5 (\id name email status metadata ->
+        { id = id
+        , name = name
+        , email = email
+        , status = status
+        , metadata = metadata
+        })
+        (Decode.field "id" Decode.int)
+        (Decode.field "name" Decode.string)
+        (Decode.field "email" Decode.string)
+        (Decode.field "status" statusDecoder)
+        (Decode.field "metadata" (Decode.dict Decode.string))
+
+
+statusDecoder : Decode.Decoder UserStatus
+statusDecoder =
+    Decode.oneOf
+        [ Decode.map (\_ -> Anonymous) (Decode.string |> Decode.andThen (\s ->
+            if s == "anonymous" then Decode.succeed {} else Decode.fail "not anonymous"))
+        , Decode.map (\record -> LoggedIn record)
+            (Decode.map2 (\username sessionId -> { username = username, sessionId = sessionId })
+                (Decode.field "username" Decode.string)
+                (Decode.field "sessionId" Decode.int))
+        ]
+
+
+
+-- EDGE CASES AND COMPLEX EXPRESSIONS
+-- =================================
+
+-- Complex nested expression
+complexExpression : Array Int -> Maybe Int
+complexExpression numbers =
+    numbers
+        |> Array.indexedMap (\i n ->
+            if Math.modBy 2 i == 0 then
+                n * 2
+            else
+                n + 1
+           )
+        |> Array.keepIf (\n -> n > 10)
+        |> Array.map (\n ->
+            let
+                squared = n * n
+                root = Math.sqrt (toFloat squared)
+            in
+            Math.floor root
+           )
+        |> Array.get 0
+
+
+-- Deeply nested when expressions
+deepNesting : Maybe (Maybe (Maybe Int)) -> String
+deepNesting triple =
+    when triple is
+        Nothing ->
+            "None"
+
+        Just Nothing ->
+            "Some None"
+
+        Just (Just Nothing) ->
+            "Some Some None"
+
+        Just (Just (Just value)) ->
+            "Some Some Some " ++ String.fromInt value
+
+
+-- Multiple function definitions with same name pattern (should be caught as error)
+-- This tests error recovery
+badFunction : Int -> Int
+badFunction x = x
+
+badFunction : Int -> Int
+badFunction x = x
+
+
+-- Test error recovery with incomplete expressions
+incompleteExpression : Int -> Int
+incompleteExpression x =
+    let
+        y = x +
+    in
+    y

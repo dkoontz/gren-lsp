@@ -1,0 +1,24 @@
+{
+  "name": "Open Utils.gren",
+  "description": "Open Utils.gren with helper functions for testing cross-module features",
+  "setup_required": [],
+  "cleanup_required": [],
+  "messages": [
+    {
+      "sender": "client",
+      "message": "textDocument/didOpen",
+      "contents": {
+        "jsonrpc": "2.0",
+        "method": "textDocument/didOpen",
+        "params": {
+          "textDocument": {
+            "uri": "{{TEST_PROJECT_ROOT}}/src/Utils.gren",
+            "languageId": "gren",
+            "version": 1,
+            "text": "module Utils exposing (helper, process)\n\nimport String\n\n-- Helper function\nhelper : String -> String\nhelper input =\n    String.toUpper input\n\n-- Process function\nprocess : Array String -> Array String\nprocess items =\n    Array.map helper items\n"
+          }
+        }
+      }
+    }
+  ]
+}
