@@ -1,0 +1,155 @@
+{
+  "valid_messages": {
+    "initialize_request": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "initialize",
+      "params": {
+        "processId": null,
+        "rootUri": "file:///tmp/test-workspace",
+        "capabilities": {}
+      }
+    },
+    "initialized_notification": {
+      "jsonrpc": "2.0",
+      "method": "initialized",
+      "params": {}
+    },
+    "shutdown_request": {
+      "jsonrpc": "2.0",
+      "id": 2,
+      "method": "shutdown"
+    },
+    "exit_notification": {
+      "jsonrpc": "2.0",
+      "method": "exit"
+    },
+    "hover_request": {
+      "jsonrpc": "2.0",
+      "id": 3,
+      "method": "textDocument/hover",
+      "params": {
+        "textDocument": {
+          "uri": "file:///test.gren"
+        },
+        "position": {
+          "line": 0,
+          "character": 0
+        }
+      }
+    },
+    "completion_request": {
+      "jsonrpc": "2.0",
+      "id": 4,
+      "method": "textDocument/completion",
+      "params": {
+        "textDocument": {
+          "uri": "file:///test.gren"
+        },
+        "position": {
+          "line": 0,
+          "character": 5
+        }
+      }
+    }
+  },
+  "invalid_messages": {
+    "missing_jsonrpc": {
+      "id": 1,
+      "method": "initialize",
+      "params": {}
+    },
+    "missing_id": {
+      "jsonrpc": "2.0",
+      "method": "textDocument/hover",
+      "params": {}
+    },
+    "invalid_jsonrpc_version": {
+      "jsonrpc": "1.0",
+      "id": 1,
+      "method": "initialize",
+      "params": {}
+    },
+    "unknown_method": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "unknown/method",
+      "params": {}
+    },
+    "malformed_params": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "textDocument/hover",
+      "params": "not_an_object"
+    }
+  },
+  "error_responses": {
+    "parse_error": {
+      "jsonrpc": "2.0",
+      "error": {
+        "code": -32700,
+        "message": "Parse error"
+      },
+      "id": null
+    },
+    "invalid_request": {
+      "jsonrpc": "2.0",
+      "error": {
+        "code": -32600,
+        "message": "Invalid Request"
+      },
+      "id": null
+    },
+    "method_not_found": {
+      "jsonrpc": "2.0",
+      "error": {
+        "code": -32601,
+        "message": "Method not found"
+      },
+      "id": 1
+    },
+    "invalid_params": {
+      "jsonrpc": "2.0",
+      "error": {
+        "code": -32602,
+        "message": "Invalid params"
+      },
+      "id": 1
+    }
+  },
+  "test_scenarios": {
+    "minimal_client_capabilities": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "initialize",
+      "params": {
+        "processId": null,
+        "rootUri": null,
+        "capabilities": {}
+      }
+    },
+    "full_client_capabilities": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "initialize",
+      "params": {
+        "processId": null,
+        "rootUri": "file:///workspace",
+        "capabilities": {
+          "textDocument": {
+            "hover": {
+              "dynamicRegistration": true,
+              "contentFormat": ["markdown", "plaintext"]
+            },
+            "completion": {
+              "dynamicRegistration": true,
+              "completionItem": {
+                "documentationFormat": ["markdown"]
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
