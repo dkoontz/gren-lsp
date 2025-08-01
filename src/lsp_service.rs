@@ -1,15 +1,57 @@
+use crate::document_manager::{DocumentManager, DocumentManagerStats};
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer};
-use tracing::info;
+use tracing::{error, info};
 
 pub struct GrenLspService {
     client: Client,
+    document_manager: Arc<RwLock<DocumentManager>>,
 }
 
 impl GrenLspService {
     pub fn new(client: Client) -> Self {
-        Self { client }
+        Self { 
+            client,
+            document_manager: Arc::new(RwLock::new(DocumentManager::new(100))), // LRU cache of 100 items
+        }
+    }
+
+    /// Get document manager statistics for debugging
+    pub async fn get_document_stats(&self) -> DocumentManagerStats {
+        self.document_manager.read().await.get_stats()
+    }
+
+    /// Test-only method: Check if a document is currently open
+    #[cfg(test)]
+    pub async fn test_is_document_open(&self, uri: &Url) -> bool {
+        self.document_manager.read().await.is_document_open(uri)
+    }
+
+    /// Test-only method: Check if a document is in the closed cache
+    #[cfg(test)]
+    pub async fn test_is_document_cached(&self, uri: &Url) -> bool {
+        self.document_manager.write().await.is_document_cached(uri)
+    }
+
+    /// Test-only method: Get document content by URI
+    #[cfg(test)]
+    pub async fn test_get_document_content(&self, uri: &Url) -> Option<String> {
+        self.document_manager.write().await.get_document_content(uri)
+    }
+
+    /// Test-only method: Get document version by URI
+    #[cfg(test)]
+    pub async fn test_get_document_version(&self, uri: &Url) -> Option<i32> {
+        self.document_manager.write().await.get_document_version(uri)
+    }
+
+    /// Test-only method: Get cache capacity and usage info
+    #[cfg(test)]
+    pub async fn test_get_cache_info(&self) -> (usize, usize) {
+        self.document_manager.read().await.get_cache_info()
     }
 }
 
@@ -56,19 +98,53 @@ impl LanguageServer for GrenLspService {
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
-        info!("Document opened: {}", params.text_document.uri);
+        let uri = params.text_document.uri.clone();
+        let version = params.text_document.version;
+        info!("Document opened: {} (version {})", uri, version);
+        
+        let mut doc_manager = self.document_manager.write().await;
+        if let Err(e) = doc_manager.did_open(params) {
+            error!("Failed to open document {}: {}", uri, e);
+            self.client
+                .log_message(MessageType::ERROR, format!("Failed to open document: {}", e))
+                .await;
+        } else {
+            let stats = doc_manager.get_stats();
+            info!("Document manager stats: {} open, {} cached", stats.open_documents, stats.cached_documents);
+        }
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
-        info!("Document changed: {}", params.text_document.uri);
+        let uri = params.text_document.uri.clone();
+        let version = params.text_document.version;
+        info!("Document changed: {} (version {})", uri, version);
+        
+        let mut doc_manager = self.document_manager.write().await;
+        if let Err(e) = doc_manager.did_change(params) {
+            error!("Failed to apply changes to document {}: {}", uri, e);
+            self.client
+                .log_message(MessageType::ERROR, format!("Failed to apply document changes: {}", e))
+                .await;
+        }
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
         info!("Document saved: {}", params.text_document.uri);
+        // For now, we don't need to do anything special on save
+        // In the future, this might trigger diagnostics or other analysis
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
-        info!("Document closed: {}", params.text_document.uri);
+        let uri = params.text_document.uri.clone();
+        info!("Document closed: {}", uri);
+        
+        let mut doc_manager = self.document_manager.write().await;
+        if let Err(e) = doc_manager.did_close(params) {
+            error!("Failed to close document {}: {}", uri, e);
+        } else {
+            let stats = doc_manager.get_stats();
+            info!("Document manager stats: {} open, {} cached", stats.open_documents, stats.cached_documents);
+        }
     }
 
     // Placeholder implementations for language features
@@ -100,5 +176,61 @@ impl LanguageServer for GrenLspService {
     async fn symbol(&self, params: WorkspaceSymbolParams) -> Result<Option<Vec<SymbolInformation>>> {
         info!("Workspace symbol request for query: {:?}", params.query);
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+impl GrenLspService {
+    /// Test-only request handler for document state inspection
+    pub async fn handle_test_request(&self, method: &str, params: serde_json::Value) -> Result<serde_json::Value> {
+        match method {
+            "test/isDocumentOpen" => {
+                let uri_str = params.get("uri")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| tower_lsp::jsonrpc::Error::invalid_params("Missing uri parameter"))?;
+                let uri = Url::parse(uri_str)
+                    .map_err(|_| tower_lsp::jsonrpc::Error::invalid_params("Invalid URI"))?;
+                
+                let is_open = self.test_is_document_open(&uri).await;
+                Ok(serde_json::json!(is_open))
+            },
+            "test/isDocumentCached" => {
+                let uri_str = params.get("uri")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| tower_lsp::jsonrpc::Error::invalid_params("Missing uri parameter"))?;
+                let uri = Url::parse(uri_str)
+                    .map_err(|_| tower_lsp::jsonrpc::Error::invalid_params("Invalid URI"))?;
+                
+                let is_cached = self.test_is_document_cached(&uri).await;
+                Ok(serde_json::json!(is_cached))
+            },
+            "test/getDocumentContent" => {
+                let uri_str = params.get("uri")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| tower_lsp::jsonrpc::Error::invalid_params("Missing uri parameter"))?;
+                let uri = Url::parse(uri_str)
+                    .map_err(|_| tower_lsp::jsonrpc::Error::invalid_params("Invalid URI"))?;
+                
+                let content = self.test_get_document_content(&uri).await;
+                Ok(serde_json::json!(content))
+            },
+            "test/getDocumentVersion" => {
+                let uri_str = params.get("uri")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| tower_lsp::jsonrpc::Error::invalid_params("Missing uri parameter"))?;
+                let uri = Url::parse(uri_str)
+                    .map_err(|_| tower_lsp::jsonrpc::Error::invalid_params("Invalid URI"))?;
+                
+                let version = self.test_get_document_version(&uri).await;
+                Ok(serde_json::json!(version))
+            },
+            "test/getCacheInfo" => {
+                let (capacity, usage) = self.test_get_cache_info().await;
+                Ok(serde_json::json!({"capacity": capacity, "usage": usage}))
+            },
+            _ => {
+                Err(tower_lsp::jsonrpc::Error::method_not_found())
+            }
+        }
     }
 }

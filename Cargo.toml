@@ -38,6 +38,13 @@ thiserror = "1.0"
 # File system operations
 tokio-util = { version = "0.7", features = ["codec"] }
 
+# Document lifecycle management
+lru = "0.12"
+url = "2.4"
+
+# UTF-8 and text processing
+ropey = "1.6"
+
 [dev-dependencies]
 # Testing framework
 tokio-test = "0.4"

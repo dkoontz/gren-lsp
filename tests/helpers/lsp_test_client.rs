@@ -398,6 +398,35 @@ impl LspTestClient {
 
         Ok(responses)
     }
+
+    /// Test-only method: Send a custom test request for document state inspection
+    pub async fn send_test_request(&mut self, method: &str, params: Value) -> Result<Value> {
+        let id = REQUEST_ID.fetch_add(1, Ordering::SeqCst);
+        let message = json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": format!("test/{}", method),
+            "params": params
+        });
+
+        self.send_message(&message).await?;
+
+        let response = timeout(
+            Duration::from_millis(self.default_timeout_ms), 
+            self.read_response_with_id(id)
+        )
+        .await
+        .map_err(|_| anyhow!("Test request timed out after {}ms", self.default_timeout_ms))??;
+
+        if let Some(error) = response.get("error") {
+            return Err(anyhow!("LSP error: {}", error));
+        }
+
+        response
+            .get("result")
+            .ok_or_else(|| anyhow!("No result in response"))
+            .map(|v| v.clone())
+    }
 }
 
 /// Task 8: Test Isolation - Ensure cleanup on drop

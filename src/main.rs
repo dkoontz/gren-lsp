@@ -4,14 +4,16 @@ use tower_lsp::{LspService, Server};
 use tracing::info;
 
 mod lsp_service;
+mod document_manager;
 
 use lsp_service::GrenLspService;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize tracing
+    // Initialize tracing - write to stderr to avoid interfering with LSP protocol on stdout
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_writer(std::io::stderr)
         .init();
 
     info!("Starting Gren LSP Server");
