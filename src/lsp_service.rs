@@ -1,21 +1,42 @@
 use crate::document_manager::{DocumentManager, DocumentManagerStats};
+use crate::compiler_interface::{GrenCompiler, CompileRequest, CompilerConfig};
+use crate::diagnostics::{DiagnosticsConverter, diagnostics_utils};
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer};
-use tracing::{error, info};
+use tracing::{debug, error, info, warn};
 
 pub struct GrenLspService {
     client: Client,
     document_manager: Arc<RwLock<DocumentManager>>,
+    compiler: Arc<GrenCompiler>,
+    diagnostics_converter: Arc<RwLock<Option<DiagnosticsConverter>>>,
+    /// Workspace root for project resolution
+    workspace_root: Arc<RwLock<Option<PathBuf>>>,
 }
 
 impl GrenLspService {
     pub fn new(client: Client) -> Self {
+        // Initialize compiler with default config, attempting to use GREN_COMPILER_PATH
+        let compiler = match GrenCompiler::with_env() {
+            Ok(compiler) => Arc::new(compiler),
+            Err(e) => {
+                // Log warning but continue with default config
+                eprintln!("Warning: Failed to initialize compiler with environment: {}. Using default config.", e);
+                Arc::new(GrenCompiler::new(CompilerConfig::default()))
+            }
+        };
+
         Self { 
             client,
             document_manager: Arc::new(RwLock::new(DocumentManager::new(100))), // LRU cache of 100 items
+            compiler,
+            diagnostics_converter: Arc::new(RwLock::new(None)),
+            workspace_root: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -53,12 +74,165 @@ impl GrenLspService {
     pub async fn test_get_cache_info(&self) -> (usize, usize) {
         self.document_manager.read().await.get_cache_info()
     }
+
+    /// Initialize workspace and diagnostics converter when workspace root is known
+    async fn initialize_workspace(&self, root_path: PathBuf) {
+        info!("Initializing workspace at {:?}", root_path);
+        
+        // Set workspace root
+        *self.workspace_root.write().await = Some(root_path.clone());
+        
+        // Initialize diagnostics converter
+        *self.diagnostics_converter.write().await = Some(DiagnosticsConverter::new(root_path));
+    }
+
+    /// Compile a document and publish diagnostics
+    async fn compile_and_publish_diagnostics(&self, uri: &Url) {
+        let _workspace_root = self.workspace_root.read().await.clone();
+        let _workspace_root = match _workspace_root {
+            Some(root) => root,
+            None => {
+                debug!("Cannot compile {}: workspace root not initialized", uri);
+                return;
+            }
+        };
+
+        // Get document content from document manager
+        let doc_manager = self.document_manager.read().await;
+        let document_content = doc_manager.get_open_document_content(uri);
+        drop(doc_manager);
+
+        let document_content = match document_content {
+            Some(content) => content,
+            None => {
+                debug!("Cannot compile {}: document not found", uri);
+                return;
+            }
+        };
+
+        // Convert URI to file path and determine module name
+        let file_path = match uri.to_file_path() {
+            Ok(path) => path,
+            Err(_) => {
+                warn!("Cannot compile {}: invalid file path", uri);
+                return;
+            }
+        };
+
+        // Determine project root by searching upward for gren.json
+        let project_root = match crate::compiler_interface::project_utils::find_project_root(&file_path).await {
+            Ok(root) => root,
+            Err(e) => {
+                debug!("Cannot find project root for {}: {}", uri, e);
+                return;
+            }
+        };
+
+        // Determine module name from file path
+        let module_name = match crate::compiler_interface::project_utils::module_name_from_path(&file_path, &project_root) {
+            Ok(name) => name,
+            Err(e) => {
+                warn!("Cannot determine module name for {}: {}", uri, e);
+                return;
+            }
+        };
+
+        // Create in-memory documents map for current document
+        let mut in_memory_documents = HashMap::new();
+        let relative_path = match file_path.strip_prefix(&project_root) {
+            Ok(rel) => rel.to_path_buf(),
+            Err(_) => {
+                warn!("File {} is not within project root {:?}", uri, project_root);
+                return;
+            }
+        };
+        in_memory_documents.insert(relative_path, document_content);
+
+        // Create compilation request
+        let compile_request = CompileRequest {
+            module_name,
+            project_root,
+            include_sourcemaps: false,
+            in_memory_documents,
+        };
+
+        // Compile the module
+        let compile_result = match self.compiler.compile(compile_request).await {
+            Ok(result) => result,
+            Err(e) => {
+                error!("Compilation failed for {}: {}", uri, e);
+                return;
+            }
+        };
+
+        // Parse compiler output into diagnostics
+        let diagnostics = if compile_result.success {
+            // No errors - clear diagnostics
+            HashMap::new()
+        } else {
+            // Parse errors into diagnostics
+            match self.compiler.parse_compiler_output(&compile_result.output) {
+                Ok(Some(compiler_output)) => {
+                    let converter = self.diagnostics_converter.read().await;
+                    match converter.as_ref() {
+                        Some(converter) => {
+                            match converter.convert_to_diagnostics(&compiler_output) {
+                                Ok(diags) => diags,
+                                Err(e) => {
+                                    error!("Failed to convert compiler output to diagnostics: {}", e);
+                                    HashMap::new()
+                                }
+                            }
+                        }
+                        None => {
+                            error!("Diagnostics converter not initialized");
+                            HashMap::new()
+                        }
+                    }
+                }
+                Ok(None) => HashMap::new(),
+                Err(e) => {
+                    error!("Failed to parse compiler output: {}", e);
+                    HashMap::new()
+                }
+            }
+        };
+
+        // Log diagnostics summary
+        let (errors, warnings, info, hints) = diagnostics_utils::count_by_severity(&diagnostics);
+        debug!("Diagnostics for {}: {} errors, {} warnings, {} info, {} hints", 
+               uri, errors, warnings, info, hints);
+
+        // Check if current file has diagnostics before consuming the map
+        let has_diagnostics_for_current_file = diagnostics.contains_key(uri);
+
+        // Publish diagnostics for each file
+        for (file_uri, file_diagnostics) in diagnostics {
+            self.client.publish_diagnostics(file_uri, file_diagnostics, None).await;
+        }
+
+        // If no diagnostics for the current file, clear its diagnostics
+        if !has_diagnostics_for_current_file {
+            self.client.publish_diagnostics(uri.clone(), vec![], None).await;
+        }
+    }
 }
 
 #[tower_lsp::async_trait]
 impl LanguageServer for GrenLspService {
-    async fn initialize(&self, _params: InitializeParams) -> Result<InitializeResult> {
+    async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
         info!("LSP initialize request received");
+        
+        // Initialize workspace root if provided
+        if let Some(root_uri) = params.root_uri {
+            if let Ok(root_path) = root_uri.to_file_path() {
+                self.initialize_workspace(root_path).await;
+            } else {
+                warn!("Invalid root URI provided: {}", root_uri);
+            }
+        } else if let Some(root_path) = params.root_path {
+            self.initialize_workspace(PathBuf::from(root_path)).await;
+        }
         
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
@@ -111,6 +285,10 @@ impl LanguageServer for GrenLspService {
         } else {
             let stats = doc_manager.get_stats();
             info!("Document manager stats: {} open, {} cached", stats.open_documents, stats.cached_documents);
+            drop(doc_manager);
+            
+            // Trigger compilation and diagnostics for opened document
+            self.compile_and_publish_diagnostics(&uri).await;
         }
     }
 
@@ -125,13 +303,20 @@ impl LanguageServer for GrenLspService {
             self.client
                 .log_message(MessageType::ERROR, format!("Failed to apply document changes: {}", e))
                 .await;
+        } else {
+            drop(doc_manager);
+            
+            // Trigger compilation and diagnostics for changed document
+            self.compile_and_publish_diagnostics(&uri).await;
         }
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
-        info!("Document saved: {}", params.text_document.uri);
-        // For now, we don't need to do anything special on save
-        // In the future, this might trigger diagnostics or other analysis
+        let uri = params.text_document.uri;
+        info!("Document saved: {}", uri);
+        
+        // Trigger compilation and diagnostics for saved document
+        self.compile_and_publish_diagnostics(&uri).await;
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
@@ -144,6 +329,10 @@ impl LanguageServer for GrenLspService {
         } else {
             let stats = doc_manager.get_stats();
             info!("Document manager stats: {} open, {} cached", stats.open_documents, stats.cached_documents);
+            drop(doc_manager);
+            
+            // Clear diagnostics for closed document
+            self.client.publish_diagnostics(uri, vec![], None).await;
         }
     }
 

@@ -14,3 +14,7 @@ I want to start with a document that details all the messages that will be suppo
 Write out the test case file(s) in a file in the ./lsp directory.
 Write out your notes on the PRD in ./docs/PRD.md
 Write out your notes on the architecture in ./docs/architecture.md
+
+## Create slash command for QA to check tests
+
+The dev agent says they are done with Epic 1 Story 4. Analyze the requirements and look at the tests, specifically checking if the assertions made in the tests are actually testing what they claim to be. Be sure to run the tests to see what test are passing. Append your analysis to the Epic 1 Story 4 document in a new section labelled `## QA Analysis`

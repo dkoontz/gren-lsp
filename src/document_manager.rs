@@ -271,6 +271,11 @@ impl DocumentManager {
         self.closed_documents.contains(uri)
     }
 
+    /// Get document content by URI (from open documents only for LSP compilation)
+    pub fn get_open_document_content(&self, uri: &Url) -> Option<String> {
+        self.open_documents.get(uri).map(|doc| doc.get_text())
+    }
+
     /// Test-only method: Get document content by URI (from open or cached)
     #[cfg(test)]
     pub fn get_document_content(&mut self, uri: &Url) -> Option<String> {

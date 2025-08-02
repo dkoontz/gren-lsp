@@ -5,6 +5,8 @@ use tracing::info;
 
 mod lsp_service;
 mod document_manager;
+mod compiler_interface;
+mod diagnostics;
 
 use lsp_service::GrenLspService;
 

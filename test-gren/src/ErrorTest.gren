@@ -1,0 +1,4 @@
+module ErrorTest exposing (main)
+
+main : String
+main = invalid_syntax(
