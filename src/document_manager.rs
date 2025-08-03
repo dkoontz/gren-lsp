@@ -193,8 +193,10 @@ impl DocumentManager {
             Some(document) => {
                 // Verify version ordering to prevent race conditions
                 if version <= document.version {
-                    warn!("Received change with old version {} for document {} (current version {})", 
-                          version, uri, document.version);
+                    return Err(anyhow!(
+                        "Invalid document version ordering. Expected version > {}, received {}",
+                        document.version, version
+                    ));
                 }
                 
                 document.apply_changes(version, params.content_changes)?;
@@ -260,13 +262,11 @@ impl DocumentManager {
     }
 
     /// Test-only method: Check if a document is currently open
-    #[cfg(test)]
     pub fn is_document_open(&self, uri: &Url) -> bool {
         self.open_documents.contains_key(uri)
     }
 
     /// Test-only method: Check if a document is in the closed cache
-    #[cfg(test)]
     pub fn is_document_cached(&mut self, uri: &Url) -> bool {
         self.closed_documents.contains(uri)
     }
@@ -277,7 +277,6 @@ impl DocumentManager {
     }
 
     /// Test-only method: Get document content by URI (from open or cached)
-    #[cfg(test)]
     pub fn get_document_content(&mut self, uri: &Url) -> Option<String> {
         if let Some(doc) = self.open_documents.get(uri) {
             Some(doc.get_text())
@@ -287,7 +286,6 @@ impl DocumentManager {
     }
 
     /// Test-only method: Get document version by URI
-    #[cfg(test)]
     pub fn get_document_version(&mut self, uri: &Url) -> Option<i32> {
         if let Some(doc) = self.open_documents.get(uri) {
             Some(doc.version)
@@ -297,7 +295,6 @@ impl DocumentManager {
     }
 
     /// Test-only method: Get the current cache capacity and usage
-    #[cfg(test)]
     pub fn get_cache_info(&self) -> (usize, usize) {
         (self.closed_documents.cap().get(), self.closed_documents.len())
     }

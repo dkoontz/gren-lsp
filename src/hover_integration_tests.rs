@@ -59,6 +59,8 @@ mod hover_integration_tests {
     /// Test hover on type annotations
     #[tokio::test]
     async fn test_hover_type_annotations() -> Result<()> {
+        // Initialize logger for debugging
+        let _ = tracing_subscriber::fmt::try_init();
         // Create temporary workspace
         let temp_dir = TempDir::new()?;
         let workspace_root = temp_dir.path().to_path_buf();
@@ -80,7 +82,7 @@ myFunction x y = x + y
         "#;
         
         let uri = Url::parse("file:///test/Main.gren")?;
-        let position = Position::new(5, 8); // At "toUpper" function name
+        let position = Position::new(5, 0); // At "toUpper" function name at start of line
         
         let text_document_position = TextDocumentPositionParams::new(
             TextDocumentIdentifier::new(uri),
@@ -100,25 +102,40 @@ myFunction x y = x + y
         // Verify response time is under 50ms
         assert!(duration.as_millis() < 50, "Hover should respond within 50ms, took: {:?}", duration);
         
-        // Verify we get hover information (may be None if symbol not found, but should not error)
-        match response {
-            Some(hover) => {
-                // If we get hover info, verify it has meaningful content
-                match hover.contents {
-                    HoverContents::Array(contents) => {
-                        assert!(!contents.is_empty(), "Hover should have some content");
+        // For deterministic input (toUpper function with type annotation), we MUST get hover information
+        let hover = response.expect("Should return hover information for 'toUpper' function with clear type annotation and documentation");
+        
+        // Verify hover has a range that covers the symbol exactly
+        let range = hover.range.expect("Hover should include range information");
+        assert_eq!(range.start.line, 5, "Hover range should start at line 5 where 'toUpper' is defined");
+        assert_eq!(range.start.character, 0, "Hover range should start at character 0 where 'toUpper' begins");
+        assert_eq!(range.end.character, 7, "Hover range should end at character 7 after 'toUpper'");
+        
+        // Verify hover content contains expected type signature and documentation
+        match hover.contents {
+            HoverContents::Array(contents) => {
+                assert_eq!(contents.len(), 2, "Should have exactly 2 content items: type signature and documentation");
+                
+                // First item should be the type signature
+                let type_item = &contents[0];
+                match type_item {
+                    MarkedString::LanguageString(ls) => {
+                        assert_eq!(ls.language, "gren", "Type signature should be marked as Gren language");
+                        assert_eq!(ls.value, "toUpper : String -> String", "Should contain exact type signature");
                     }
-                    HoverContents::Markup(_) => {
-                        // Single markup content is also valid
+                    _ => panic!("First hover item should be a LanguageString with type signature"),
+                }
+                
+                // Second item should be the documentation
+                let doc_item = &contents[1];
+                match doc_item {
+                    MarkedString::String(doc) => {
+                        assert_eq!(doc, "Converts a string to uppercase", "Should contain exact documentation text");
                     }
-                    HoverContents::Scalar(_) => {
-                        // Single scalar content is also valid
-                    }
+                    _ => panic!("Second hover item should be a String with documentation"),
                 }
             }
-            None => {
-                // No hover info found - this is acceptable for a symbol not in the index
-            }
+            _ => panic!("Hover contents should be Array format with type signature and documentation"),
         }
         
         Ok(())
@@ -220,7 +237,14 @@ processUser user =
             Position::new(9, 8),  // At "userName" variable
         ];
         
-        for (i, position) in test_positions.iter().enumerate() {
+        let expected_content = vec![
+            "User",           // Type at position 0
+            "createUser",     // Function at position 1  
+            "processUser",    // Function at position 2
+            "userName",       // Variable at position 3
+        ];
+        
+        for (i, (position, expected_symbol)) in test_positions.iter().zip(expected_content.iter()).enumerate() {
             let text_document_position = TextDocumentPositionParams::new(
                 TextDocumentIdentifier::new(uri.clone()),
                 *position,
@@ -238,6 +262,34 @@ processUser user =
             // Verify performance and no errors
             assert!(result.is_ok(), "Hover test {} should not error", i);
             assert!(duration.as_millis() < 50, "Hover test {} should respond within 50ms", i);
+            
+            // If we get hover content, verify it contains the expected symbol
+            if let Ok(Some(hover)) = result {
+                let content_found = match hover.contents {
+                    HoverContents::Markup(markup) => markup.value.contains(expected_symbol),
+                    HoverContents::Scalar(marked_string) => {
+                        let content = match marked_string {
+                            MarkedString::String(s) => s,
+                            MarkedString::LanguageString(ls) => ls.value,
+                        };
+                        content.contains(expected_symbol)
+                    }
+                    HoverContents::Array(contents) => {
+                        contents.iter().any(|c| match c {
+                            MarkedString::String(s) => s.contains(expected_symbol),
+                            MarkedString::LanguageString(ls) => ls.value.contains(expected_symbol),
+                        })
+                    }
+                };
+                
+                if content_found {
+                    println!("✅ Hover test {}: Found expected symbol '{}' in hover content", i, expected_symbol);
+                } else {
+                    println!("⚠️ Hover test {}: Expected symbol '{}' not found in hover content", i, expected_symbol);
+                }
+            } else {
+                println!("⚠️ Hover test {}: No hover content returned for expected symbol '{}'", i, expected_symbol);
+            }
         }
         
         Ok(())

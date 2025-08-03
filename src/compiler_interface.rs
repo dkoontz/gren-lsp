@@ -307,10 +307,19 @@ impl GrenCompiler {
 
         debug!("Using working directory: {:?}", working_dir);
 
-        // Build compiler command
+        // Build compiler command  
+        // Fix: Convert module name back to file path with .gren extension for compiler
+        let module_file_name = if request.module_name.contains('.') {
+            // For nested modules like "Utils.Parser", convert to "src/Utils/Parser.gren"
+            format!("src/{}.gren", request.module_name.replace('.', "/"))
+        } else {
+            // For top-level modules like "Main", convert to "src/Main.gren" 
+            format!("src/{}.gren", request.module_name)
+        };
+        
         let mut cmd = Command::new(&self.config.compiler_path);
         cmd.arg("make")
-           .arg(&request.module_name)
+           .arg(&module_file_name)  // Use file path instead of bare module name
            .arg("--report=json")
            .arg("--output=/dev/null") // We only want diagnostics, not JS output
            .current_dir(working_dir)

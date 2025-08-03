@@ -216,56 +216,141 @@ impl HoverEngine {
 
     /// Extract type information for local symbols
     async fn extract_local_type_info(&self, symbol_node: Node<'_>, document_content: &str) -> Result<Option<String>> {
-        // Look for type annotations in parent nodes
-        let mut current = symbol_node.parent();
-        while let Some(node) = current {
-            match node.kind() {
-                "type_annotation" => {
-                    // Found a type annotation
-                    let type_text = get_node_text(node, document_content);
-                    return Ok(Some(type_text));
-                }
-                "value_declaration" => {
-                    // Look for type annotation within the value declaration
-                    for child in node.children(&mut node.walk()) {
-                        if child.kind() == "type_annotation" {
-                            let type_text = get_node_text(child, document_content);
-                            return Ok(Some(type_text));
-                        }
-                    }
-                    break; // Stop at value declaration boundary
-                }
-                _ => {}
-            }
-            current = node.parent();
+        
+        // For function names, look for type annotation in the same file
+        // In Gren, type annotations appear immediately before function definitions
+        let symbol_name = get_node_text(symbol_node, document_content);
+        
+        // Find the root node and search for type annotations
+        let mut current = symbol_node;
+        while let Some(parent) = current.parent() {
+            current = parent;
         }
-
-        Ok(None)
+        let root = current;
+        
+        // Search through all nodes looking for type annotations
+        let mut cursor = root.walk();
+        let mut found_type_annotation = false;
+        let mut type_annotation_text = None;
+        
+        fn traverse_for_type_annotation(
+            node: Node<'_>, 
+            cursor: &mut tree_sitter::TreeCursor<'_>, 
+            symbol_name: &str,
+            document_content: &str,
+            found_type: &mut bool,
+            type_text: &mut Option<String>
+        ) {
+            if *found_type {
+                return;
+            }
+            
+            // Check if this is a type annotation
+            if node.kind() == "type_annotation" {
+                let annotation_text = get_node_text(node, document_content);
+                
+                // Check if this type annotation is for our symbol
+                // Type annotations in Gren have the pattern: "symbolName : Type"
+                if annotation_text.trim_start().starts_with(&format!("{} :", symbol_name)) {
+                    *type_text = Some(annotation_text.trim().to_string());
+                    *found_type = true;
+                    return;
+                }
+            }
+            
+            // Recursively traverse children
+            if cursor.goto_first_child() {
+                loop {
+                    traverse_for_type_annotation(cursor.node(), cursor, symbol_name, document_content, found_type, type_text);
+                    if *found_type || !cursor.goto_next_sibling() {
+                        break;
+                    }
+                }
+                cursor.goto_parent();
+            }
+        }
+        
+        traverse_for_type_annotation(root, &mut cursor, &symbol_name, document_content, &mut found_type_annotation, &mut type_annotation_text);
+        
+        Ok(type_annotation_text)
     }
 
     /// Extract documentation from nearby comments
     fn extract_nearby_documentation(&self, symbol_node: Node<'_>, document_content: &str) -> Result<Option<String>> {
-        // Look for documentation comments above the symbol
-        let mut current = symbol_node.parent();
-        while let Some(node) = current {
-            // Look for preceding siblings that might be comments
-            if let Some(prev_sibling) = node.prev_sibling() {
-                if prev_sibling.kind() == "block_comment" {
-                    let comment_text = get_node_text(prev_sibling, document_content);
-                    if comment_text.starts_with("{-|") && comment_text.ends_with("-}") {
-                        // Extract documentation content
-                        let doc_content = comment_text
-                            .strip_prefix("{-|").unwrap_or(&comment_text)
-                            .strip_suffix("-}").unwrap_or(&comment_text)
-                            .trim();
-                        return Ok(Some(doc_content.to_string()));
+        
+        let symbol_name = get_node_text(symbol_node, document_content);
+        
+        // Find the root node and search for documentation comments
+        let mut current = symbol_node;
+        while let Some(parent) = current.parent() {
+            current = parent;
+        }
+        let root = current;
+        
+        // Search for documentation comments that precede the symbol definition
+        let mut cursor = root.walk();
+        let mut found_documentation = None;
+        
+        fn traverse_for_documentation(
+            node: Node<'_>, 
+            cursor: &mut tree_sitter::TreeCursor<'_>, 
+            symbol_name: &str,
+            document_content: &str,
+            doc_result: &mut Option<String>
+        ) {
+            if doc_result.is_some() {
+                return;
+            }
+            
+            // Check if this is a block comment (documentation)
+            if node.kind() == "block_comment" {
+                let comment_text = get_node_text(node, document_content);
+                
+                if comment_text.starts_with("{-|") && comment_text.ends_with("-}") {
+                    // Check if the next non-comment/whitespace node contains our symbol
+                    let mut next_sibling = node.next_sibling();
+                    while let Some(sibling) = next_sibling {
+                        match sibling.kind() {
+                            "block_comment" | "line_comment" => {
+                                // Skip other comments
+                                next_sibling = sibling.next_sibling();
+                                continue;
+                            }
+                            _ => {
+                                // Check if this node or its children contain our symbol
+                                let sibling_text = get_node_text(sibling, document_content);
+                                if sibling_text.contains(&format!("{} :", symbol_name)) || 
+                                   sibling_text.contains(&format!("{} =", symbol_name)) {
+                                    // Extract documentation content
+                                    let doc_content = comment_text
+                                        .strip_prefix("{-|").unwrap_or(&comment_text)
+                                        .strip_suffix("-}").unwrap_or(&comment_text)
+                                        .trim();
+                                    *doc_result = Some(doc_content.to_string());
+                                    return;
+                                }
+                                break;
+                            }
+                        }
                     }
                 }
             }
-            current = node.parent();
+            
+            // Recursively traverse children
+            if cursor.goto_first_child() {
+                loop {
+                    traverse_for_documentation(cursor.node(), cursor, symbol_name, document_content, doc_result);
+                    if doc_result.is_some() || !cursor.goto_next_sibling() {
+                        break;
+                    }
+                }
+                cursor.goto_parent();
+            }
         }
-
-        Ok(None)
+        
+        traverse_for_documentation(root, &mut cursor, &symbol_name, document_content, &mut found_documentation);
+        
+        Ok(found_documentation)
     }
 
     /// Format hover information into LSP Hover response

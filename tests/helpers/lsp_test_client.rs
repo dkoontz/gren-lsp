@@ -126,7 +126,15 @@ impl LspTestClient {
         let params = InitializeParams {
             process_id: Some(std::process::id()),
             root_uri: Some(Url::parse("file:///tmp/test-workspace").unwrap()),
-            capabilities: ClientCapabilities::default(),
+            capabilities: ClientCapabilities {
+                text_document: Some(TextDocumentClientCapabilities {
+                    hover: Some(HoverClientCapabilities::default()),
+                    completion: Some(CompletionClientCapabilities::default()),
+                    definition: Some(GotoCapability::default()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
             ..Default::default()
         };
 

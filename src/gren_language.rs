@@ -1,17 +1,13 @@
 use anyhow::Result;
 use tree_sitter::Language;
 
-extern "C" {
-    fn tree_sitter_gren() -> Language;
-}
-
 /// Get the Gren tree-sitter language
 /// 
 /// This function provides the tree-sitter language for Gren parsing.
 /// The grammar is compiled from the tree-sitter-gren repository
 /// and linked during the build process.
 pub fn language() -> Result<Language> {
-    Ok(unsafe { tree_sitter_gren() })
+    Ok(tree_sitter_gren::language())
 }
 
 /// Check if the Gren language is available

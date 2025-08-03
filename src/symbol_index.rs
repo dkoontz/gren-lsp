@@ -927,29 +927,66 @@ defaultUser = { name = "Anonymous", age = 0 }
         // Index the file
         index.index_file(&uri, sample_code).await.unwrap();
         
-        // Verify symbols were extracted and stored
+        // Verify symbol extraction results
         let stats = index.get_stats().await.unwrap();
-        assert!(stats.symbol_count > 0, "Should have extracted symbols");
-        assert!(stats.import_count > 0, "Should have extracted imports");
+        assert_eq!(stats.symbol_count, 9, "Should have extracted 9 symbols (including duplicates for function declarations and definitions)");
+        assert_eq!(stats.import_count, 2, "Should have extracted exactly 2 imports: Array and Dict");
         assert_eq!(stats.file_count, 1, "Should have one file indexed");
         
-        // Check for specific symbols
-        let functions = index.find_symbols_by_name("calculateAge").await.unwrap();
-        assert!(!functions.is_empty(), "Should find calculateAge function");
+        // Check for specific functions with exact content validation (functions appear twice: declaration + definition)
+        let calculate_age_symbols = index.find_symbols_by_name("calculateAge").await.unwrap();
+        assert_eq!(calculate_age_symbols.len(), 2, "Should find calculateAge function declaration and definition");
         
-        let types = index.find_symbols_by_name("Status").await.unwrap();
-        assert!(!types.is_empty(), "Should find Status type");
+        // Find the function declaration (with signature)
+        let calculate_age_decl = calculate_age_symbols.iter()
+            .find(|s| s.signature.is_some())
+            .expect("Should find calculateAge function declaration with signature");
+        assert_eq!(calculate_age_decl.name, "calculateAge");
+        assert_eq!(calculate_age_decl.signature, Some("calculateAge : Int -> Int -> Int".to_string()));
+        assert_eq!(calculate_age_decl.container, Some("TestModule".to_string()));
+        assert_eq!(calculate_age_decl.kind, symbol_kind_to_i32(SymbolKind::FUNCTION));
         
-        let aliases = index.find_symbols_by_name("User").await.unwrap();
-        assert!(!aliases.is_empty(), "Should find User type alias");
+        // Check Status type with exact validation
+        let status_symbols = index.find_symbols_by_name("Status").await.unwrap();
+        assert_eq!(status_symbols.len(), 1, "Should find exactly one Status type");
+        let status_type = &status_symbols[0];
+        assert_eq!(status_type.name, "Status");
+        assert_eq!(status_type.kind, symbol_kind_to_i32(SymbolKind::ENUM)); // Custom type
+        assert_eq!(status_type.container, Some("TestModule".to_string()));
+        
+        // Check User type alias with exact validation
+        let user_symbols = index.find_symbols_by_name("User").await.unwrap();
+        assert_eq!(user_symbols.len(), 1, "Should find exactly one User type alias");
+        let user_type = &user_symbols[0];
+        assert_eq!(user_type.name, "User");
+        assert_eq!(user_type.signature, Some("type alias User".to_string()));
+        assert_eq!(user_type.container, Some("TestModule".to_string()));
+        
+        // Verify processUser function (declaration + definition)
+        let process_user_symbols = index.find_symbols_by_name("processUser").await.unwrap();
+        assert_eq!(process_user_symbols.len(), 2, "Should find processUser function declaration and definition");
+        let process_user_decl = process_user_symbols.iter()
+            .find(|s| s.signature.is_some())
+            .expect("Should find processUser declaration with signature");
+        assert_eq!(process_user_decl.signature, Some("processUser : User -> String".to_string()));
+        
+        // Verify defaultUser constant (declaration + definition)
+        let default_user_symbols = index.find_symbols_by_name("defaultUser").await.unwrap();
+        assert_eq!(default_user_symbols.len(), 2, "Should find defaultUser declaration and definition");
+        let default_user_decl = default_user_symbols.iter()
+            .find(|s| s.signature.is_some())
+            .expect("Should find defaultUser declaration with signature");
+        assert_eq!(default_user_decl.signature, Some("defaultUser : User".to_string()));
         
         // Verify module symbols
         let modules = index.find_symbols_by_name("TestModule").await.unwrap();
-        assert!(!modules.is_empty(), "Should find TestModule");
+        assert_eq!(modules.len(), 1, "Should find exactly one TestModule");
+        let module = &modules[0];
+        assert_eq!(module.kind, symbol_kind_to_i32(SymbolKind::MODULE));
         
-        // Test symbol search by prefix
+        // Test symbol search by prefix with exact count
         let user_symbols = index.find_symbols_by_prefix("user", 10).await.unwrap();
-        assert!(!user_symbols.is_empty(), "Should find symbols starting with 'user'");
+        assert_eq!(user_symbols.len(), 1, "Should find one symbol starting with 'user' (likely from field access)");
         
         println!("Integration test passed - extracted {} symbols and {} imports", 
                  stats.symbol_count, stats.import_count);
@@ -1007,43 +1044,63 @@ processData config input =
         index.index_file(&utils_uri, utils_code).await.unwrap();
         index.index_file(&main_uri, main_code).await.unwrap();
         
-        // Test 1: Find locally defined symbols in Main
+        // Test 1: Find locally defined symbols in Main with exact validation
         let local_symbols = index.find_available_symbols(&main_uri, "processData").await.unwrap();
-        assert!(!local_symbols.is_empty(), "Should find processData in main file");
+        assert_eq!(local_symbols.len(), 2, "Should find processData declaration and definition");
+        let process_data_decl = local_symbols.iter()
+            .find(|s| s.signature.is_some())
+            .expect("Should find processData declaration with signature");
+        assert_eq!(process_data_decl.name, "processData");
+        assert_eq!(process_data_decl.signature, Some("processData : Config -> String -> String".to_string()));
+        assert_eq!(process_data_decl.container, Some("Main".to_string()));
         
-        // Debug: Check what symbols we have
-        let all_symbols = index.find_symbols_by_name("helper").await.unwrap();
-        println!("All symbols named 'helper': {:?}", all_symbols);
-        
-        let imports = index.get_imports_for_file(&main_uri).await.unwrap();
-        println!("Imports for main file: {:?}", imports);
-        
-        // Test 2: Find imported symbols from Utils  
+        // Test 2: Find imported helper function with exact content validation
         let imported_helper = index.find_available_symbols(&main_uri, "helper").await.unwrap();
-        println!("Available helper symbols in main: {:?}", imported_helper);
-        assert!(!imported_helper.is_empty(), "Should find helper function from Utils import");
+        assert_eq!(imported_helper.len(), 2, "Should find helper declaration and definition from Utils import");
+        let helper_decl = imported_helper.iter()
+            .find(|s| s.signature.is_some())
+            .expect("Should find helper declaration with signature");
+        assert_eq!(helper_decl.name, "helper");
+        assert_eq!(helper_decl.signature, Some("helper : String -> String".to_string()));
+        assert_eq!(helper_decl.container, Some("Utils".to_string()));
+        assert_eq!(helper_decl.uri, "file:///utils.gren");
         
+        // Test 3: Find imported Config type with exact validation
         let imported_config = index.find_available_symbols(&main_uri, "Config").await.unwrap();
-        assert!(!imported_config.is_empty(), "Should find Config type from Utils import");
+        assert_eq!(imported_config.len(), 1, "Should find exactly one Config type from Utils import");
+        let config = &imported_config[0];
+        assert_eq!(config.name, "Config");
+        assert_eq!(config.signature, Some("type alias Config".to_string()));
+        assert_eq!(config.container, Some("Utils".to_string()));
         
-        // Test 3: Should NOT find non-imported symbols
+        // Test 4: Should NOT find non-imported symbols
         let private_fn = index.find_available_symbols(&main_uri, "privateFunction").await.unwrap();
-        assert!(private_fn.is_empty(), "Should NOT find privateFunction (not imported)");
+        assert_eq!(private_fn.len(), 0, "Should NOT find privateFunction (not imported)");
         
-        // Test 4: Test module alias resolution (Array as Arr)
-        // This would need qualified symbol names like "Arr.map" to work properly
+        // Test 5: Verify import records with exact validation
+        let imports = index.get_imports_for_file(&main_uri).await.unwrap();
+        assert_eq!(imports.len(), 2, "Should have exactly 2 imports");
         
-        // Test 5: Find modules that expose a symbol
+        let utils_import = imports.iter().find(|i| i.imported_module == "Utils").unwrap();
+        assert_eq!(utils_import.exposing_all, false);
+        let imported_symbols = utils_import.get_imported_symbols();
+        assert_eq!(imported_symbols.len(), 2);
+        assert!(imported_symbols.contains(&"helper".to_string()));
+        assert!(imported_symbols.contains(&"Config".to_string()));
+        
+        let array_import = imports.iter().find(|i| i.imported_module == "Array").unwrap();
+        assert_eq!(array_import.alias_name, Some("Arr".to_string()));
+        
+        // Test 6: Find modules that expose specific symbol
         let modules_with_helper = index.find_modules_exposing_symbol("helper").await.unwrap();
-        assert!(modules_with_helper.contains(&"Utils".to_string()), "Utils should expose helper");
+        assert_eq!(modules_with_helper.len(), 1, "Should find exactly one module exposing helper");
+        assert_eq!(modules_with_helper[0], "Utils");
         
-        // Test 6: Completion symbols
+        // Test 7: Completion symbols with exact validation (note: may deduplicate)
         let completions = index.find_completion_symbols(&main_uri, "h", 10).await.unwrap();
-        assert!(!completions.is_empty(), "Should find symbols starting with 'h'");
-        
-        // Check that helper is in completions
-        let has_helper = completions.iter().any(|s| s.name == "helper");
-        assert!(has_helper, "Completions should include 'helper' from import");
+        assert_eq!(completions.len(), 1, "Should find helper (deduplicated) starting with 'h'");
+        let helper_completion = &completions[0];
+        assert_eq!(helper_completion.name, "helper");
         
         println!("Cross-module resolution test passed!");
         println!("Found {} local symbols, {} imported symbols", 

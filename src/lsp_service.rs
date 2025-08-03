@@ -62,31 +62,26 @@ impl GrenLspService {
     }
 
     /// Test-only method: Check if a document is currently open
-    #[cfg(test)]
     pub async fn test_is_document_open(&self, uri: &Url) -> bool {
         self.document_manager.read().await.is_document_open(uri)
     }
 
     /// Test-only method: Check if a document is in the closed cache
-    #[cfg(test)]
     pub async fn test_is_document_cached(&self, uri: &Url) -> bool {
         self.document_manager.write().await.is_document_cached(uri)
     }
 
     /// Test-only method: Get document content by URI
-    #[cfg(test)]
     pub async fn test_get_document_content(&self, uri: &Url) -> Option<String> {
         self.document_manager.write().await.get_document_content(uri)
     }
 
     /// Test-only method: Get document version by URI
-    #[cfg(test)]
     pub async fn test_get_document_version(&self, uri: &Url) -> Option<i32> {
         self.document_manager.write().await.get_document_version(uri)
     }
 
     /// Test-only method: Get cache capacity and usage info
-    #[cfg(test)]
     pub async fn test_get_cache_info(&self) -> (usize, usize) {
         self.document_manager.read().await.get_cache_info()
     }
@@ -297,23 +292,63 @@ impl LanguageServer for GrenLspService {
             self.initialize_workspace(PathBuf::from(root_path)).await;
         }
         
-        Ok(InitializeResult {
-            capabilities: ServerCapabilities {
-                text_document_sync: Some(TextDocumentSyncCapability::Kind(
-                    TextDocumentSyncKind::INCREMENTAL,
-                )),
-                hover_provider: Some(HoverProviderCapability::Simple(true)),
-                completion_provider: Some(CompletionOptions {
+        // CAPABILITY INTERSECTION LOGIC: Server adapts capabilities based on client support
+        let mut server_capabilities = ServerCapabilities::default();
+        
+        // Always provide text document sync
+        server_capabilities.text_document_sync = Some(TextDocumentSyncCapability::Kind(
+            TextDocumentSyncKind::INCREMENTAL,
+        ));
+        
+        // Handle text document capabilities based on client declarations
+        let client_capabilities = &params.capabilities;
+        
+        if let Some(text_doc_caps) = &client_capabilities.text_document {
+            // CLIENT DECLARED TEXT DOCUMENT CAPABILITIES: Use capability intersection
+            
+            // Hover: Only advertise if client supports it
+            if let Some(_hover_caps) = &text_doc_caps.hover {
+                server_capabilities.hover_provider = Some(HoverProviderCapability::Simple(true));
+            }
+            
+            // Completion: Only advertise if client supports it  
+            if let Some(_completion_caps) = &text_doc_caps.completion {
+                server_capabilities.completion_provider = Some(CompletionOptions {
                     resolve_provider: Some(false),
                     trigger_characters: Some(vec![".".to_string()]),
                     ..Default::default()
-                }),
-                definition_provider: Some(OneOf::Left(true)),
-                references_provider: Some(OneOf::Left(true)),
-                document_symbol_provider: Some(OneOf::Left(true)),
-                workspace_symbol_provider: Some(OneOf::Left(true)),
-                ..Default::default()
-            },
+                });
+            }
+            
+            // Definition: Provide by default for any client with text document capabilities
+            // This is a common LSP feature that most clients expect even if not explicitly declared
+            server_capabilities.definition_provider = Some(OneOf::Left(true));
+            
+            // References: Only advertise if client supports it
+            if let Some(_references_caps) = &text_doc_caps.references {
+                server_capabilities.references_provider = Some(OneOf::Left(true));
+            }
+            
+            // Document Symbol: Only advertise if client supports it
+            if let Some(_document_symbol_caps) = &text_doc_caps.document_symbol {
+                server_capabilities.document_symbol_provider = Some(OneOf::Left(true));
+            }
+        } else {
+            // CLIENT SET text_document TO None
+            // Following LSP capability intersection principle: when client explicitly sets text_document to None,
+            // it declares no text document capabilities, so server should not advertise any text document features.
+            // This ensures deterministic, specification-compliant behavior.
+        }
+        
+        // Workspace Symbol: Only advertise if client supports it
+        if let Some(workspace_caps) = &params.capabilities.workspace {
+            if let Some(_symbol_caps) = &workspace_caps.symbol {
+                server_capabilities.workspace_symbol_provider = Some(OneOf::Left(true));
+            }
+        }
+
+        Ok(InitializeResult {
+            capabilities: server_capabilities,
             server_info: Some(ServerInfo {
                 name: "gren-lsp".to_string(),
                 version: Some(env!("CARGO_PKG_VERSION").to_string()),
@@ -363,22 +398,24 @@ impl LanguageServer for GrenLspService {
         let version = params.text_document.version;
         info!("Document changed: {} (version {})", uri, version);
         
-        let mut doc_manager = self.document_manager.write().await;
-        if let Err(e) = doc_manager.did_change(params) {
-            error!("Failed to apply changes to document {}: {}", uri, e);
-            self.client
-                .log_message(MessageType::ERROR, format!("Failed to apply document changes: {}", e))
-                .await;
-        } else {
-            drop(doc_manager);
-            
-            // Trigger compilation and diagnostics for changed document
-            self.compile_and_publish_diagnostics(&uri).await;
-            
-            // Re-index symbols from the changed document
-            self.index_document_symbols(&uri).await;
+        // Use strict version validation including version gap detection
+        match self.validate_document_change(params).await {
+            Ok(()) => {
+                // Trigger compilation and diagnostics for changed document
+                self.compile_and_publish_diagnostics(&uri).await;
+                
+                // Re-index symbols from the changed document
+                self.index_document_symbols(&uri).await;
+            }
+            Err(e) => {
+                error!("Failed to apply changes to document {}: {:?}", uri, e);
+                self.client
+                    .log_message(MessageType::ERROR, format!("Failed to apply document changes: {}", e.message))
+                    .await;
+            }
         }
     }
+
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
         let uri = params.text_document.uri;
@@ -555,6 +592,74 @@ impl LanguageServer for GrenLspService {
 }
 
 impl GrenLspService {
+    /// Validate document change request with deterministic error responses
+    /// Returns specific LSP error codes for validation failures
+    pub async fn validate_document_change(&self, params: DidChangeTextDocumentParams) -> std::result::Result<(), tower_lsp::jsonrpc::Error> {
+        let uri = &params.text_document.uri;
+        let requested_version = params.text_document.version;
+        
+        // Check if document exists
+        let doc_manager = self.document_manager.read().await;
+        let current_document = doc_manager.get_document(uri);
+        
+        match current_document {
+            None => {
+                // Document not found - LSP specification error
+                Err(tower_lsp::jsonrpc::Error {
+                    code: tower_lsp::jsonrpc::ErrorCode::InvalidRequest,
+                    message: format!("Document not found: {}", uri).into(),
+                    data: None,
+                })
+            },
+            Some(document) => {
+                let current_version = document.version;
+                
+                // Validate version ordering - must be exactly current_version + 1
+                if requested_version <= current_version {
+                    Err(tower_lsp::jsonrpc::Error {
+                        code: tower_lsp::jsonrpc::ErrorCode::InvalidParams,
+                        message: format!(
+                            "Invalid document version. Expected: {}, received: {}",
+                            current_version + 1,
+                            requested_version
+                        ).into(),
+                        data: Some(serde_json::json!({
+                            "expectedVersion": current_version + 1,
+                            "receivedVersion": requested_version,
+                            "currentVersion": current_version
+                        })),
+                    })
+                } else if requested_version > current_version + 1 {
+                    Err(tower_lsp::jsonrpc::Error {
+                        code: tower_lsp::jsonrpc::ErrorCode::InvalidParams,
+                        message: format!(
+                            "Version gap detected. Expected: {}, received: {}",
+                            current_version + 1,
+                            requested_version
+                        ).into(),
+                        data: Some(serde_json::json!({
+                            "expectedVersion": current_version + 1,
+                            "receivedVersion": requested_version,
+                            "currentVersion": current_version
+                        })),
+                    })
+                } else {
+                    // Version is valid - proceed with change
+                    drop(doc_manager);
+                    let mut doc_manager_mut = self.document_manager.write().await;
+                    doc_manager_mut.did_change(params).map_err(|e| {
+                        tower_lsp::jsonrpc::Error {
+                            code: tower_lsp::jsonrpc::ErrorCode::InternalError,
+                            message: format!("Failed to apply document changes: {}", e).into(),
+                            data: None,
+                        }
+                    })?;
+                    Ok(())
+                }
+            }
+        }
+    }
+
     /// Index symbols from a document
     async fn index_document_symbols(&self, uri: &Url) {
         let symbol_index = self.symbol_index.read().await;
@@ -589,9 +694,9 @@ impl GrenLspService {
     }
 }
 
-#[cfg(test)]
 impl GrenLspService {
-    /// Test-only request handler for document state inspection
+    /// Test-only request handler for document state inspection  
+    #[cfg(test)]
     pub async fn handle_test_request(&self, method: &str, params: serde_json::Value) -> Result<serde_json::Value> {
         match method {
             "test/isDocumentOpen" => {
@@ -638,9 +743,68 @@ impl GrenLspService {
                 let (capacity, usage) = self.test_get_cache_info().await;
                 Ok(serde_json::json!({"capacity": capacity, "usage": usage}))
             },
+            "test/validateDocumentChange" => {
+                let params: DidChangeTextDocumentParams = serde_json::from_value(params)
+                    .map_err(|e| tower_lsp::jsonrpc::Error::invalid_params(format!("Invalid parameters: {}", e)))?;
+                
+                match self.validate_document_change(params).await {
+                    Ok(()) => Ok(serde_json::json!({"success": true})),
+                    Err(e) => Err(e),
+                }
+            },
             _ => {
                 Err(tower_lsp::jsonrpc::Error::method_not_found())
             }
         }
+    }
+
+    // Custom request handlers for test methods - NOT gated behind cfg(test) since they're used in main.rs
+    pub async fn handle_get_document_version_custom(&self, params: serde_json::Value) -> Result<serde_json::Value> {
+        let uri_str = params.get("uri")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| tower_lsp::jsonrpc::Error::invalid_params("Missing uri parameter"))?;
+        let uri = Url::parse(uri_str)
+            .map_err(|_| tower_lsp::jsonrpc::Error::invalid_params("Invalid URI"))?;
+        
+        let version = self.test_get_document_version(&uri).await;
+        Ok(serde_json::json!(version))
+    }
+
+    pub async fn handle_get_document_content_custom(&self, params: serde_json::Value) -> Result<serde_json::Value> {
+        let uri_str = params.get("uri")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| tower_lsp::jsonrpc::Error::invalid_params("Missing uri parameter"))?;
+        let uri = Url::parse(uri_str)
+            .map_err(|_| tower_lsp::jsonrpc::Error::invalid_params("Invalid URI"))?;
+        
+        let content = self.test_get_document_content(&uri).await;
+        Ok(serde_json::json!(content))
+    }
+
+    pub async fn handle_is_document_open_custom(&self, params: serde_json::Value) -> Result<serde_json::Value> {
+        let uri_str = params.get("uri")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| tower_lsp::jsonrpc::Error::invalid_params("Missing uri parameter"))?;
+        let uri = Url::parse(uri_str)
+            .map_err(|_| tower_lsp::jsonrpc::Error::invalid_params("Invalid URI"))?;
+        
+        let is_open = self.test_is_document_open(&uri).await;
+        Ok(serde_json::json!(is_open))
+    }
+
+    pub async fn handle_is_document_cached_custom(&self, params: serde_json::Value) -> Result<serde_json::Value> {
+        let uri_str = params.get("uri")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| tower_lsp::jsonrpc::Error::invalid_params("Missing uri parameter"))?;
+        let uri = Url::parse(uri_str)
+            .map_err(|_| tower_lsp::jsonrpc::Error::invalid_params("Invalid URI"))?;
+        
+        let is_cached = self.test_is_document_cached(&uri).await;
+        Ok(serde_json::json!(is_cached))
+    }
+
+    pub async fn handle_get_cache_info_custom(&self, _params: serde_json::Value) -> Result<serde_json::Value> {
+        let (capacity, usage) = self.test_get_cache_info().await;
+        Ok(serde_json::json!({"capacity": capacity, "usage": usage}))
     }
 }

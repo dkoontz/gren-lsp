@@ -12,6 +12,8 @@ mod tree_sitter_queries;
 mod gren_language;
 mod completion;
 mod scope_analysis;
+mod hover;
+mod goto_definition;
 
 use lsp_service::GrenLspService;
 
@@ -25,8 +27,14 @@ async fn main() -> Result<()> {
 
     info!("Starting Gren LSP Server");
 
-    // Create LSP service
-    let (service, socket) = LspService::new(|client| GrenLspService::new(client));
+    // Create LSP service with custom test methods
+    let (service, socket) = LspService::build(|client| GrenLspService::new(client))
+        .custom_method("test/getDocumentVersion", GrenLspService::handle_get_document_version_custom)
+        .custom_method("test/getDocumentContent", GrenLspService::handle_get_document_content_custom)
+        .custom_method("test/isDocumentOpen", GrenLspService::handle_is_document_open_custom)
+        .custom_method("test/isDocumentCached", GrenLspService::handle_is_document_cached_custom)
+        .custom_method("test/getCacheInfo", GrenLspService::handle_get_cache_info_custom)
+        .finish();
     
     // Run the server with stdio transport
     let server = Server::new(stdin(), stdout(), socket);

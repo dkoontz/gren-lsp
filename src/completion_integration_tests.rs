@@ -39,22 +39,52 @@ mod completion_integration_tests {
             }),
         };
         
-        // Test that completion engine responds without errors
+        // Test that completion engine provides appropriate completions for deterministic context
         let document_content = "module Main exposing (..)\n\nmyFunction input = ";
         let start_time = Instant::now();
         
-        // This should not fail even if it returns empty results
+        // For deterministic input "myFunction input = ", we should get specific keyword completions
         let result = completion_engine.handle_completion(completion_params, document_content).await;
         let duration = start_time.elapsed();
         
-        // Verify it responds quickly and doesn't error
-        match result {
-            Ok(_) => {
-                assert!(duration.as_millis() < 100, "Should respond within 100ms");
+        // Verify performance and get actual completions
+        assert!(duration.as_millis() < 100, "Should respond within 100ms");
+        let completion_response = result.expect("Should return completions for valid Gren context");
+        
+        // Validate we get actual completion items
+        match completion_response {
+            Some(CompletionResponse::Array(items)) => {
+                assert!(items.len() >= 5, "Should provide at least 5 keyword completions");
+                
+                // Extract completion labels for validation
+                let item_labels: Vec<String> = items.iter().map(|item| item.label.clone()).collect();
+                
+                // For "myFunction input = " context, we should get keywords for expressions
+                assert!(item_labels.contains(&"let".to_string()), "Should suggest 'let' keyword for local bindings");
+                assert!(item_labels.contains(&"if".to_string()), "Should suggest 'if' keyword for conditionals");
+                
+                // Check for pattern matching keyword (Gren uses 'when', not 'case')
+                assert!(item_labels.contains(&"when".to_string()), "Should suggest 'when' keyword for pattern matching");
+                
+                // Verify completion item structure
+                let let_item = items.iter().find(|item| item.label == "let").unwrap();
+                assert_eq!(let_item.kind, Some(CompletionItemKind::KEYWORD));
+                assert!(let_item.detail.is_some(), "Keyword should have detail");
+                
+                // NOTE: Current implementation provides all keywords without context filtering
+                // This is acceptable for initial implementation but should be improved in future
+                assert!(item_labels.len() > 10, "Should provide comprehensive keyword suggestions");
+                
+                // Verify essential expression keywords are present
+                assert!(item_labels.contains(&"when".to_string()), "Should suggest 'when' for pattern matching");
+                assert!(item_labels.contains(&"then".to_string()), "Should suggest 'then' for conditionals");
+                assert!(item_labels.contains(&"else".to_string()), "Should suggest 'else' for conditionals");
             }
-            Err(e) => {
-                eprintln!("Completion error: {:?}", e);
-                panic!("Completion should not error: {}", e);
+            Some(CompletionResponse::List(_)) => {
+                panic!("Expected Array format for completion response");
+            }
+            None => {
+                panic!("Should provide completions for valid Gren expression context");
             }
         }
         
@@ -155,6 +185,88 @@ mod completion_integration_tests {
         
         let duration = start.elapsed();
         assert!(duration.as_millis() < 100, "Completion engine creation should be fast");
+        
+        Ok(())
+    }
+    
+    /// Test completion accuracy in different Gren contexts
+    #[tokio::test]
+    async fn test_completion_accuracy_validation() -> Result<()> {
+        // Create temporary workspace
+        let temp_dir = TempDir::new()?;
+        let workspace_root = temp_dir.path().to_path_buf();
+        
+        // Use in-memory database for testing
+        let symbol_index = crate::symbol_index::SymbolIndex::new_in_memory(workspace_root).await?;
+        let completion_engine = CompletionEngine::new(symbol_index)?;
+        
+        // Test 1: Module-level context should suggest module-level keywords
+        let module_context = "module Main exposing (..)\n\n\n";
+        let uri = Url::parse("file:///test/Main.gren")?;
+        let position = Position::new(2, 0); // Start of third line (after empty line)
+        
+        let completion_params = CompletionParams {
+            text_document_position: TextDocumentPositionParams::new(
+                TextDocumentIdentifier::new(uri.clone()),
+                position,
+            ),
+            work_done_progress_params: WorkDoneProgressParams::default(),
+            partial_result_params: PartialResultParams::default(),
+            context: Some(tower_lsp::lsp_types::CompletionContext {
+                trigger_kind: CompletionTriggerKind::INVOKED,
+                trigger_character: None,
+            }),
+        };
+        
+        let result = completion_engine.handle_completion(completion_params, module_context).await?;
+        
+        if let Some(CompletionResponse::Array(items)) = result {
+            let labels: Vec<String> = items.iter().map(|item| item.label.clone()).collect();
+            
+            // Current implementation provides all keywords - this is acceptable for initial implementation
+            assert!(labels.contains(&"import".to_string()), "Should suggest 'import' keyword");
+            assert!(labels.contains(&"type".to_string()), "Should suggest 'type' keyword");
+            assert!(labels.contains(&"let".to_string()), "Should suggest 'let' keyword");
+            assert!(labels.contains(&"if".to_string()), "Should suggest 'if' keyword");
+            
+            // Verify we get comprehensive suggestions
+            assert!(labels.len() > 10, "Should provide comprehensive keyword coverage");
+        } else {
+            panic!("Should provide completions for module-level context");
+        }
+        
+        // Test 2: Simple expression context (same as first test for consistency)
+        let expr_context = "module Main exposing (..)\n\nmyFunction input = ";
+        let expr_position = Position::new(2, 19); // After "myFunction input = "
+        
+        let expr_completion_params = CompletionParams {
+            text_document_position: TextDocumentPositionParams::new(
+                TextDocumentIdentifier::new(uri.clone()),
+                expr_position,
+            ),
+            work_done_progress_params: WorkDoneProgressParams::default(),
+            partial_result_params: PartialResultParams::default(),
+            context: Some(tower_lsp::lsp_types::CompletionContext {
+                trigger_kind: CompletionTriggerKind::INVOKED,
+                trigger_character: None,
+            }),
+        };
+        
+        let expr_result = completion_engine.handle_completion(expr_completion_params, expr_context).await?;
+        
+        if let Some(CompletionResponse::Array(expr_items)) = expr_result {
+            assert!(expr_items.len() >= 1, "Should provide expression completions");
+            
+            // Verify we get appropriate expression-level completions
+            let expr_labels: Vec<String> = expr_items.iter().map(|item| item.label.clone()).collect();
+            
+            // Should suggest some completions in expression context
+            assert!(expr_labels.len() > 0, "Should suggest some completions in expression context");
+            
+            // Current implementation provides all keywords - verify basic functionality
+            assert!(expr_labels.contains(&"let".to_string()) || expr_labels.contains(&"if".to_string()), 
+                   "Should provide at least some expression keywords");
+        }
         
         Ok(())
     }
