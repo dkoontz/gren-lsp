@@ -8,9 +8,13 @@ pub mod gren_language;
 pub mod completion;
 pub mod scope_analysis;
 pub mod hover;
+pub mod goto_definition;
 
 #[cfg(test)]
 mod completion_integration_tests;
 
 #[cfg(test)]
 mod hover_integration_tests;
+
+#[cfg(test)]
+mod goto_definition_integration_tests;

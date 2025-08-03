@@ -3,6 +3,7 @@ use crate::compiler_interface::{GrenCompiler, CompileRequest, CompilerConfig};
 use crate::diagnostics::{DiagnosticsConverter, diagnostics_utils};
 use crate::completion::CompletionEngine;
 use crate::hover::HoverEngine;
+use crate::goto_definition::GotoDefinitionEngine;
 use crate::symbol_index::SymbolIndex;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -26,6 +27,8 @@ pub struct GrenLspService {
     completion_engine: Arc<RwLock<Option<CompletionEngine>>>,
     /// Hover engine
     hover_engine: Arc<RwLock<Option<HoverEngine>>>,
+    /// Go-to-definition engine
+    goto_definition_engine: Arc<RwLock<Option<GotoDefinitionEngine>>>,
 }
 
 impl GrenLspService {
@@ -49,6 +52,7 @@ impl GrenLspService {
             symbol_index: Arc::new(RwLock::new(None)),
             completion_engine: Arc::new(RwLock::new(None)),
             hover_engine: Arc::new(RwLock::new(None)),
+            goto_definition_engine: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -122,6 +126,17 @@ impl GrenLspService {
                     }
                     Err(e) => {
                         error!("Failed to initialize hover engine: {}", e);
+                    }
+                }
+                
+                // Initialize go-to-definition engine
+                match GotoDefinitionEngine::new(symbol_index.clone()) {
+                    Ok(goto_definition_engine) => {
+                        info!("Go-to-definition engine initialized successfully");
+                        *self.goto_definition_engine.write().await = Some(goto_definition_engine);
+                    }
+                    Err(e) => {
+                        error!("Failed to initialize go-to-definition engine: {}", e);
                     }
                 }
                 
@@ -482,7 +497,45 @@ impl LanguageServer for GrenLspService {
 
     async fn goto_definition(&self, params: GotoDefinitionParams) -> Result<Option<GotoDefinitionResponse>> {
         info!("Go to definition request at {:?}", params.text_document_position_params.position);
-        Ok(None)
+        
+        let uri = &params.text_document_position_params.text_document.uri;
+        
+        // Get document content
+        let doc_manager = self.document_manager.read().await;
+        let document_content = match doc_manager.get_open_document_content(uri) {
+            Some(content) => content,
+            None => {
+                debug!("Document not found for go-to-definition: {}", uri);
+                return Ok(None);
+            }
+        };
+        drop(doc_manager);
+        
+        // Get go-to-definition engine
+        let mut goto_definition_engine = self.goto_definition_engine.write().await;
+        let goto_definition_engine = match goto_definition_engine.as_mut() {
+            Some(engine) => engine,
+            None => {
+                debug!("Go-to-definition engine not initialized");
+                return Ok(None);
+            }
+        };
+        
+        // Handle go-to-definition request
+        match goto_definition_engine.handle_goto_definition(params, &document_content).await {
+            Ok(response) => {
+                if response.is_some() {
+                    debug!("Go-to-definition found target location");
+                } else {
+                    debug!("Go-to-definition found no target");
+                }
+                Ok(response)
+            }
+            Err(e) => {
+                error!("Go-to-definition failed: {}", e);
+                Ok(None)
+            }
+        }
     }
 
     async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
