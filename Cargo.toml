@@ -48,6 +48,10 @@ ropey = "1.6"
 # Temporary file handling
 tempfile = "3.0"
 
+# Build dependencies for compiling tree-sitter grammar
+[build-dependencies]
+cc = "1.0"
+
 [dev-dependencies]
 # Testing framework
 tokio-test = "0.4"

@@ -5,6 +5,7 @@ use tracing::debug;
 use url::Url;
 
 use crate::symbol_index::Symbol;
+use crate::gren_language;
 
 /// Tree-sitter query engine for extracting symbols from Gren AST
 #[derive(Debug)]
@@ -33,15 +34,14 @@ impl GrenQueryEngine {
         let function_query_str = r#"
         ; Function type annotation
         (type_annotation
-          name: (lower_case_identifier) @function.name
-          typeExpression: (type_expression) @function.type) @function.annotation
+          (lower_case_identifier) @function.name
+          (type_expression) @function.type) @function.annotation
 
         ; Function value declaration  
         (value_declaration
-          functionDeclarationLeft: (function_declaration_left
-            name: (lower_case_identifier) @function.name
-            patterns: (pattern)*) @function.params
-          expression: (_) @function.body) @function.declaration
+          (function_declaration_left
+            (lower_case_identifier) @function.name) @function.params
+          body: (_) @function.body) @function.declaration
         "#;
 
         // Type definitions query - extracts custom types and type aliases
@@ -60,15 +60,29 @@ impl GrenQueryEngine {
 
         // Import statements query - for cross-module resolution
         let import_query_str = r#"
-        ; Import clauses
+        ; Import clauses - basic structure
         (import_clause
-          moduleName: (upper_case_qid) @import.module
+          moduleName: (upper_case_qid) @import.module) @import.declaration
+
+        ; Import alias
+        (import_clause
           asClause: (as_clause
-            name: (upper_case_identifier) @import.alias)?
+            name: (upper_case_identifier) @import.alias))
+
+        ; Exposed values within exposing list  
+        (import_clause
           exposing: (exposing_list
-            (exposed_value (lower_case_identifier) @import.value)*
-            (exposed_type (upper_case_identifier) @import.type)*
-            doubleDot: (double_dot) @import.all)?) @import.declaration
+            (exposed_value (lower_case_identifier) @import.value)))
+
+        ; Exposed types within exposing list
+        (import_clause
+          exposing: (exposing_list  
+            (exposed_type (upper_case_identifier) @import.type)))
+
+        ; Double dot for exposing all
+        (import_clause
+          exposing: (exposing_list
+            (double_dot) @import.all))
         "#;
 
         // Constants and module-level values query
@@ -76,10 +90,10 @@ impl GrenQueryEngine {
         ; Top-level constants (value declarations without parameters)
         (value_declaration
           functionDeclarationLeft: (function_declaration_left
-            name: (lower_case_identifier) @constant.name
+            (lower_case_identifier) @constant.name
             ; No patterns = constant
             ) @constant.left
-          expression: (_) @constant.value) @constant.declaration
+          body: (_) @constant.value) @constant.declaration
         "#;
 
         // Module declaration query
@@ -120,24 +134,43 @@ impl GrenQueryEngine {
         let mut symbols = Vec::new();
         let root_node = tree.root_node();
 
+        // First, extract the module name to use as container for other symbols
+        let module_name = self.extract_module_name(&root_node, source)?;
+
         // Extract functions
-        symbols.extend(self.extract_functions(uri, &root_node, source)?);
+        symbols.extend(self.extract_functions(uri, &root_node, source, module_name.as_deref())?);
 
         // Extract types
-        symbols.extend(self.extract_types(uri, &root_node, source)?);
+        symbols.extend(self.extract_types(uri, &root_node, source, module_name.as_deref())?);
 
         // Extract constants
-        symbols.extend(self.extract_constants(uri, &root_node, source)?);
+        symbols.extend(self.extract_constants(uri, &root_node, source, module_name.as_deref())?);
 
         // Extract module declaration
         symbols.extend(self.extract_module(uri, &root_node, source)?);
 
-        debug!("Extracted {} symbols from {}", symbols.len(), uri);
+        debug!("Extracted {} symbols from {} with module container '{:?}'", symbols.len(), uri, module_name);
         Ok(symbols)
     }
 
+    /// Extract module name from the file
+    fn extract_module_name(&self, node: &Node, source: &str) -> Result<Option<String>> {
+        let mut cursor = QueryCursor::new();
+        let matches = cursor.matches(&self.module_query, *node, source.as_bytes());
+
+        for m in matches {
+            for capture in m.captures {
+                let capture_name = self.module_query.capture_names()[capture.index as usize];
+                if capture_name == "module.name" {
+                    return Ok(Some(get_node_text(capture.node, source)));
+                }
+            }
+        }
+        Ok(None)
+    }
+
     /// Extract function definitions
-    fn extract_functions(&self, uri: &Url, node: &Node, source: &str) -> Result<Vec<Symbol>> {
+    fn extract_functions(&self, uri: &Url, node: &Node, source: &str, container: Option<&str>) -> Result<Vec<Symbol>> {
         let mut symbols = Vec::new();
         let mut cursor = QueryCursor::new();
         let matches = cursor.matches(&self.function_query, *node, source.as_bytes());
@@ -194,7 +227,7 @@ impl GrenQueryEngine {
                         SymbolKind::FUNCTION,
                         uri,
                         range,
-                        None, // container
+                        container.map(|s| s.to_string()), // Use module container
                         signature,
                         None, // documentation
                     );
@@ -207,7 +240,7 @@ impl GrenQueryEngine {
     }
 
     /// Extract type definitions (custom types and type aliases)
-    fn extract_types(&self, uri: &Url, node: &Node, source: &str) -> Result<Vec<Symbol>> {
+    fn extract_types(&self, uri: &Url, node: &Node, source: &str, container: Option<&str>) -> Result<Vec<Symbol>> {
         let mut symbols = Vec::new();
         let mut cursor = QueryCursor::new();
         let matches = cursor.matches(&self.type_query, *node, source.as_bytes());
@@ -249,7 +282,7 @@ impl GrenQueryEngine {
                             SymbolKind::ENUM, // Custom types are like enums
                             uri,
                             type_range,
-                            None,
+                            container.map(|s| s.to_string()),
                             Some(signature),
                             None,
                         );
@@ -281,7 +314,7 @@ impl GrenQueryEngine {
                             SymbolKind::STRUCT, // Type aliases are like structs
                             uri,
                             alias_range,
-                            None,
+                            container.map(|s| s.to_string()),
                             Some(format!("type alias {}", alias_name)),
                             None,
                         );
@@ -296,7 +329,7 @@ impl GrenQueryEngine {
     }
 
     /// Extract constants (module-level values without parameters)
-    fn extract_constants(&self, uri: &Url, node: &Node, source: &str) -> Result<Vec<Symbol>> {
+    fn extract_constants(&self, uri: &Url, node: &Node, source: &str, container: Option<&str>) -> Result<Vec<Symbol>> {
         let mut symbols = Vec::new();
         let mut cursor = QueryCursor::new();
         let matches = cursor.matches(&self.constant_query, *node, source.as_bytes());
@@ -325,7 +358,7 @@ impl GrenQueryEngine {
                     SymbolKind::CONSTANT,
                     uri,
                     range,
-                    None,
+                    container.map(|s| s.to_string()),
                     None,
                     None,
                 );
@@ -379,54 +412,58 @@ impl GrenQueryEngine {
 
     /// Extract import information for cross-module resolution
     pub fn extract_imports(&self, uri: &Url, tree: &Tree, source: &str) -> Result<Vec<ImportInfo>> {
-        let mut imports = Vec::new();
+        let mut imports = std::collections::HashMap::new();
         let root_node = tree.root_node();
         let mut cursor = QueryCursor::new();
         let matches = cursor.matches(&self.import_query, root_node, source.as_bytes());
 
+        // Collect all captures for each import clause node
         for m in matches {
-            let mut module_name = String::new();
-            let mut alias_name = None;
-            let mut imported_symbols = Vec::new();
-            let mut exposing_all = false;
-
             for capture in m.captures {
                 let capture_name = self.import_query.capture_names()[capture.index as usize];
                 
+                // Find the import_clause parent node to group captures
+                let import_clause_node = find_import_clause_parent(capture.node);
+                let import_node_id = import_clause_node.id();
+                
+                let import_entry = imports.entry(import_node_id).or_insert_with(|| {
+                    (String::new(), None, Vec::new(), false)
+                });
+                
                 match capture_name {
                     "import.module" => {
-                        module_name = get_node_text(capture.node, source);
+                        import_entry.0 = get_node_text(capture.node, source);
                     }
                     "import.alias" => {
-                        alias_name = Some(get_node_text(capture.node, source));
+                        import_entry.1 = Some(get_node_text(capture.node, source));
                     }
-                    "import.value" => {
-                        imported_symbols.push(get_node_text(capture.node, source));
-                    }
-                    "import.type" => {
-                        imported_symbols.push(get_node_text(capture.node, source));
+                    "import.value" | "import.type" => {
+                        import_entry.2.push(get_node_text(capture.node, source));
                     }
                     "import.all" => {
-                        exposing_all = true;
+                        import_entry.3 = true;
                     }
                     _ => {}
                 }
             }
+        }
 
-            if !module_name.is_empty() {
-                let import_info = ImportInfo::new(
+        // Convert to ImportInfo objects
+        let import_list: Vec<ImportInfo> = imports.into_values()
+            .filter(|(module_name, _, _, _)| !module_name.is_empty())
+            .map(|(module_name, alias_name, imported_symbols, exposing_all)| {
+                ImportInfo::new(
                     uri,
                     module_name,
                     if imported_symbols.is_empty() { None } else { Some(imported_symbols) },
                     alias_name,
                     exposing_all,
-                );
-                imports.push(import_info);
-            }
-        }
+                )
+            })
+            .collect();
 
-        debug!("Extracted {} imports from {}", imports.len(), uri);
-        Ok(imports)
+        debug!("Extracted {} imports from {}", import_list.len(), uri);
+        Ok(import_list)
     }
 }
 
@@ -478,17 +515,19 @@ fn node_to_range(node: Node) -> Range {
 }
 
 /// Get the Gren tree-sitter language
-/// This would normally load the compiled Gren grammar
-/// For now, this is a placeholder that will need to be implemented
-/// when the actual Gren tree-sitter grammar is available
 fn get_gren_language() -> Result<tree_sitter::Language> {
-    // TODO: Load the actual Gren tree-sitter grammar
-    // This would typically be:
-    // extern "C" { fn tree_sitter_gren() -> tree_sitter::Language; }
-    // unsafe { tree_sitter_gren() }
-    
-    // For now, return an error indicating this needs to be implemented
-    Err(anyhow!("Gren tree-sitter grammar not yet integrated. This will be implemented when the tree-sitter-gren grammar is available."))
+    gren_language::language()
+}
+
+/// Find the import_clause ancestor node for grouping captures
+fn find_import_clause_parent(mut node: Node) -> Node {
+    while let Some(parent) = node.parent() {
+        if parent.kind() == "import_clause" {
+            return parent;
+        }
+        node = parent;
+    }
+    node
 }
 
 #[cfg(test)]
@@ -497,14 +536,16 @@ mod tests {
 
     #[test]
     fn test_query_compilation() {
-        // Test that all queries compile successfully
-        // This will fail until we have the actual Gren grammar, but it's good to have
+        // Test that all queries compile successfully with the actual Gren grammar
         let result = GrenQueryEngine::new();
         
-        // For now, we expect this to fail with our placeholder implementation
+        // Should now succeed with the integrated grammar
         match result {
-            Err(e) => assert!(e.to_string().contains("Gren tree-sitter grammar not yet integrated")),
-            Ok(_) => panic!("Expected error due to missing Gren grammar"),
+            Ok(engine) => {
+                // Verify the engine was created successfully
+                assert!(format!("{:?}", engine).contains("GrenQueryEngine"));
+            }
+            Err(e) => panic!("Query engine creation should succeed: {}", e),
         }
     }
 

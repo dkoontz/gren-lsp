@@ -67,15 +67,15 @@ Let expressions with local bindings.
 - Fields: `valueDeclaration` nodes, `body` expression
 - Pattern: `(let_in_expr valueDeclaration: (...) body: (...))`
 
-#### `when_expr`
+#### `when_is_expr`
 Pattern matching expressions (Gren's equivalent to case).
 - Fields: `expr` (expression to match), `branch` nodes for patterns
-- Pattern: `(when_expr expr: (...) branch: (...))`
+- Pattern: `(when_is_expr expr: (...) branch: (...))`
 
-#### `when_branch`
+#### `when_is_branch`
 Individual branches in when expressions.
 - Fields: `pattern` (pattern), `expr` (result expression)
-- Pattern: `(when_branch pattern: (...) expr: (...))`
+- Pattern: `(when_is_branch pattern: (...) expr: (...))`
 
 #### `function_call_expr` 
 Function application expressions.
@@ -87,10 +87,10 @@ Record creation and updates.
 - Fields: `field` nodes for record fields
 - Examples: `{ name = "test", age = 25 }`, `{ user | active = True }`
 
-#### `array_expr`
-Array literals.
-- Fields: array elements as expression nodes
-- Pattern: `(array_expr (value_expr...) (...))`
+#### `list_expr`
+List literals (Gren uses arrays, but the AST node is called list_expr).
+- Fields: `exprList` nodes for list elements
+- Pattern: `(list_expr exprList: (...))`
 
 ### Patterns
 
@@ -170,7 +170,9 @@ Operator symbols.
   exposing: (exposing_list
     (exposed_type 
       (upper_case_identifier) @import.exposed_type)
-    (lower_case_identifier) @import.exposed_function))
+    (exposed_value
+      (lower_case_identifier) @import.exposed_function)
+    doubleDot: (double_dot) @import.all))
 
 (import_clause
   moduleName: (upper_case_qid) @import.module
@@ -208,9 +210,9 @@ Operator symbols.
 ### Pattern Matching Constructs
 ```scheme
 ;; When expression patterns
-(when_expr
+(when_is_expr
   expr: (_) @when.expression
-  branch: (when_branch
+  branch: (when_is_branch
     pattern: (_) @when.pattern
     expr: (_) @when.result)*)
 

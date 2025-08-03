@@ -340,6 +340,38 @@ impl SymbolIndex {
         Ok(result.rows_affected())
     }
 
+    /// Index all symbols from file content using tree-sitter parsing
+    pub async fn index_file(&self, uri: &Url, content: &str) -> Result<()> {
+        use crate::tree_sitter_queries::GrenQueryEngine;
+        use crate::gren_language;
+        
+        debug!("Indexing symbols for file: {}", uri);
+        
+        // Parse the file with tree-sitter
+        let language = gren_language::language()?;
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&language)?;
+        
+        let tree = parser.parse(content, None)
+            .ok_or_else(|| anyhow!("Failed to parse file: {}", uri))?;
+            
+        // Create query engine and extract symbols
+        let query_engine = GrenQueryEngine::new()?;
+        let symbols = query_engine.extract_symbols(uri, &tree, content)?;
+        
+        // Update symbols for this file
+        self.update_symbols_for_file(uri, &symbols).await?;
+        
+        // Extract and store import information
+        let imports = query_engine.extract_imports(uri, &tree, content)?;
+        self.update_imports_for_file(uri, &imports).await?;
+        
+        debug!("Indexed file: {} - added {} symbols and {} imports", 
+               uri, symbols.len(), imports.len());
+        
+        Ok(())
+    }
+
     /// Update symbols for a file (remove old, add new)
     pub async fn update_symbols_for_file(&self, uri: &Url, symbols: &[Symbol]) -> Result<()> {
         let mut tx = self.pool.begin().await
@@ -406,10 +438,191 @@ impl SymbolIndex {
             import_count: import_count as usize,
         })
     }
+    
+    /// Update imports for a specific file
+    pub async fn update_imports_for_file(&self, uri: &Url, imports: &[crate::tree_sitter_queries::ImportInfo]) -> Result<()> {
+        let mut tx = self.pool.begin().await
+            .map_err(|e| anyhow!("Failed to begin transaction: {}", e))?;
+            
+        // Remove existing imports for this file
+        sqlx::query("DELETE FROM imports WHERE source_uri = ?1")
+            .bind(uri.to_string())
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| anyhow!("Failed to remove old imports for file '{}': {}", uri, e))?;
+            
+        // Add new imports
+        for import in imports {
+            let imported_symbols_json = import.imported_symbols
+                .as_ref()
+                .map(|symbols| serde_json::to_string(symbols).unwrap_or_default());
+                
+            sqlx::query(
+                r#"
+                INSERT INTO imports (source_uri, imported_module, imported_symbols, alias_name, exposing_all)
+                VALUES (?1, ?2, ?3, ?4, ?5)
+                "#,
+            )
+            .bind(&import.source_uri)
+            .bind(&import.imported_module)
+            .bind(imported_symbols_json)
+            .bind(&import.alias_name)
+            .bind(import.exposing_all)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| anyhow!("Failed to add import: {}", e))?;
+        }
+        
+        tx.commit().await
+            .map_err(|e| anyhow!("Failed to commit imports transaction: {}", e))?;
+            
+        debug!("Updated {} imports for file {}", imports.len(), uri);
+        Ok(())
+    }
 
     /// Get workspace root
     pub fn workspace_root(&self) -> &Path {
         &self.workspace_root
+    }
+    
+    /// Find symbols that are available in a given file through imports
+    /// This is the core cross-module resolution functionality
+    pub async fn find_available_symbols(&self, file_uri: &Url, symbol_name: &str) -> Result<Vec<Symbol>> {
+        let mut available_symbols = Vec::new();
+        
+        // 1. Find local symbols in the same file
+        let local_symbols = self.find_symbols_in_file(file_uri).await?;
+        for symbol in local_symbols {
+            if symbol.name == symbol_name {
+                available_symbols.push(symbol);
+            }
+        }
+        
+        // 2. Find symbols from imported modules
+        let imports = self.get_imports_for_file(file_uri).await?;
+        for import in imports {
+            // If exposing all symbols from the module
+            if import.exposing_all {
+                let module_symbols = self.find_symbols_by_module(&import.imported_module, symbol_name).await?;
+                available_symbols.extend(module_symbols);
+            }
+            // If specific symbols are imported
+            else if let Some(imported_symbols_json) = &import.imported_symbols {
+                if let Ok(imported_symbols) = serde_json::from_str::<Vec<String>>(imported_symbols_json) {
+                    if imported_symbols.contains(&symbol_name.to_string()) {
+                        let module_symbols = self.find_symbols_by_module(&import.imported_module, symbol_name).await?;
+                        available_symbols.extend(module_symbols);
+                    }
+                }
+            }
+            // If using module alias (e.g., Dict.map where Dict is the alias)
+            else if let Some(alias) = &import.alias_name {
+                if symbol_name.starts_with(&format!("{}.", alias)) {
+                    let actual_symbol_name = symbol_name.strip_prefix(&format!("{}.", alias)).unwrap();
+                    let module_symbols = self.find_symbols_by_module(&import.imported_module, actual_symbol_name).await?;
+                    available_symbols.extend(module_symbols);
+                }
+            }
+        }
+        
+        debug!("Found {} available symbols named '{}' for file {}", 
+               available_symbols.len(), symbol_name, file_uri);
+        Ok(available_symbols)
+    }
+    
+    /// Find symbols by module name (for cross-module resolution)
+    async fn find_symbols_by_module(&self, module_name: &str, symbol_name: &str) -> Result<Vec<Symbol>> {
+        let symbols = sqlx::query_as::<_, Symbol>(
+            "SELECT * FROM symbols WHERE container = ?1 AND name = ?2"
+        )
+        .bind(module_name)
+        .bind(symbol_name)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| anyhow!("Failed to find symbols by module: {}", e))?;
+        
+        Ok(symbols)
+    }
+    
+    /// Get all imports for a specific file
+    async fn get_imports_for_file(&self, file_uri: &Url) -> Result<Vec<ImportInfo>> {
+        let imports = sqlx::query_as::<_, ImportInfo>(
+            "SELECT * FROM imports WHERE source_uri = ?1"
+        )
+        .bind(file_uri.to_string())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| anyhow!("Failed to get imports for file: {}", e))?;
+        
+        Ok(imports)
+    }
+    
+    /// Find all modules that expose a specific symbol (for reverse resolution)
+    pub async fn find_modules_exposing_symbol(&self, symbol_name: &str) -> Result<Vec<String>> {
+        let modules: Vec<(String,)> = sqlx::query_as(
+            "SELECT DISTINCT container FROM symbols WHERE name = ?1 AND container IS NOT NULL"
+        )
+        .bind(symbol_name)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| anyhow!("Failed to find modules exposing symbol: {}", e))?;
+        
+        Ok(modules.into_iter().map(|(module,)| module).collect())
+    }
+    
+    /// Find symbols that would be available for auto-completion in a file
+    pub async fn find_completion_symbols(&self, file_uri: &Url, prefix: &str, limit: i32) -> Result<Vec<Symbol>> {
+        let mut completion_symbols = Vec::new();
+        
+        // 1. Add local symbols that match prefix
+        let local_symbols = self.find_symbols_in_file(file_uri).await?;
+        for symbol in local_symbols {
+            if symbol.name.starts_with(prefix) {
+                completion_symbols.push(symbol);
+            }
+        }
+        
+        // 2. Add symbols from imports
+        let imports = self.get_imports_for_file(file_uri).await?;
+        for import in imports {
+            if import.exposing_all {
+                // Add all symbols from the module that match prefix
+                let module_symbols = self.find_symbols_by_module_prefix(&import.imported_module, prefix, limit).await?;
+                completion_symbols.extend(module_symbols);
+            } else if let Some(imported_symbols_json) = &import.imported_symbols {
+                // Add only specifically imported symbols that match prefix
+                if let Ok(imported_symbols) = serde_json::from_str::<Vec<String>>(imported_symbols_json) {
+                    for imported_symbol in imported_symbols {
+                        if imported_symbol.starts_with(prefix) {
+                            let symbols = self.find_symbols_by_module(&import.imported_module, &imported_symbol).await?;
+                            completion_symbols.extend(symbols);
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Limit results and remove duplicates
+        completion_symbols.sort_by(|a, b| a.name.cmp(&b.name));
+        completion_symbols.dedup_by(|a, b| a.name == b.name && a.uri == b.uri);
+        completion_symbols.truncate(limit as usize);
+        
+        Ok(completion_symbols)
+    }
+    
+    /// Find symbols in a module that start with a prefix
+    async fn find_symbols_by_module_prefix(&self, module_name: &str, prefix: &str, limit: i32) -> Result<Vec<Symbol>> {
+        let symbols = sqlx::query_as::<_, Symbol>(
+            "SELECT * FROM symbols WHERE container = ?1 AND name LIKE ?2 LIMIT ?3"
+        )
+        .bind(module_name)
+        .bind(format!("{}%", prefix))
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| anyhow!("Failed to find symbols by module prefix: {}", e))?;
+        
+        Ok(symbols)
     }
 
     /// Close the database pool
@@ -654,5 +867,171 @@ mod tests {
         assert_eq!(doc_symbol.name, "myFunction");
         assert_eq!(doc_symbol.kind, SymbolKind::FUNCTION);
         assert_eq!(doc_symbol.detail, Some("myFunction : Int -> String".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_file_indexing_integration() {
+        // Use in-memory database for testing
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        let workspace = std::env::temp_dir();
+        let index = SymbolIndex {
+            pool,
+            workspace_root: workspace,
+        };
+        
+        // Initialize schema
+        index.initialize_schema().await.unwrap();
+        
+        // Sample Gren code
+        let sample_code = r#"
+module TestModule exposing (..)
+
+import Array exposing (Array)
+import Dict as Dictionary
+
+type Status = Loading | Success String | Error
+
+type alias User = { name : String, age : Int }
+
+calculateAge : Int -> Int -> Int
+calculateAge birthYear currentYear =
+    currentYear - birthYear
+
+processUser : User -> String
+processUser user =
+    "User " ++ user.name ++ " is " ++ String.fromInt user.age ++ " years old"
+
+defaultUser : User
+defaultUser = { name = "Anonymous", age = 0 }
+        "#;
+        
+        let uri = Url::parse("file:///test-module.gren").unwrap();
+        
+        // Index the file
+        index.index_file(&uri, sample_code).await.unwrap();
+        
+        // Verify symbols were extracted and stored
+        let stats = index.get_stats().await.unwrap();
+        assert!(stats.symbol_count > 0, "Should have extracted symbols");
+        assert!(stats.import_count > 0, "Should have extracted imports");
+        assert_eq!(stats.file_count, 1, "Should have one file indexed");
+        
+        // Check for specific symbols
+        let functions = index.find_symbols_by_name("calculateAge").await.unwrap();
+        assert!(!functions.is_empty(), "Should find calculateAge function");
+        
+        let types = index.find_symbols_by_name("Status").await.unwrap();
+        assert!(!types.is_empty(), "Should find Status type");
+        
+        let aliases = index.find_symbols_by_name("User").await.unwrap();
+        assert!(!aliases.is_empty(), "Should find User type alias");
+        
+        // Verify module symbols
+        let modules = index.find_symbols_by_name("TestModule").await.unwrap();
+        assert!(!modules.is_empty(), "Should find TestModule");
+        
+        // Test symbol search by prefix
+        let user_symbols = index.find_symbols_by_prefix("user", 10).await.unwrap();
+        assert!(!user_symbols.is_empty(), "Should find symbols starting with 'user'");
+        
+        println!("Integration test passed - extracted {} symbols and {} imports", 
+                 stats.symbol_count, stats.import_count);
+        
+        index.close().await;
+    }
+
+    #[tokio::test]
+    async fn test_cross_module_resolution() {
+        // Use in-memory database for testing
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        let workspace = std::env::temp_dir();
+        let index = SymbolIndex {
+            pool,
+            workspace_root: workspace,
+        };
+        
+        // Initialize schema
+        index.initialize_schema().await.unwrap();
+        
+        // Create two Gren files to test cross-module resolution
+        
+        // File 1: Utils module
+        let utils_code = r#"
+module Utils exposing (helper, Config)
+
+type alias Config = { debug : Bool }
+
+helper : String -> String  
+helper text = "Helper: " ++ text
+
+privateFunction : Int -> Int
+privateFunction x = x * 2
+        "#;
+        
+        // File 2: Main module that imports Utils
+        let main_code = r#"
+module Main exposing (..)
+
+import Utils exposing (helper, Config)
+import Array as Arr
+
+processData : Config -> String -> String
+processData config input =
+    if config.debug then
+        helper input
+    else
+        input
+        "#;
+        
+        let utils_uri = Url::parse("file:///utils.gren").unwrap();
+        let main_uri = Url::parse("file:///main.gren").unwrap();
+        
+        // Index both files
+        index.index_file(&utils_uri, utils_code).await.unwrap();
+        index.index_file(&main_uri, main_code).await.unwrap();
+        
+        // Test 1: Find locally defined symbols in Main
+        let local_symbols = index.find_available_symbols(&main_uri, "processData").await.unwrap();
+        assert!(!local_symbols.is_empty(), "Should find processData in main file");
+        
+        // Debug: Check what symbols we have
+        let all_symbols = index.find_symbols_by_name("helper").await.unwrap();
+        println!("All symbols named 'helper': {:?}", all_symbols);
+        
+        let imports = index.get_imports_for_file(&main_uri).await.unwrap();
+        println!("Imports for main file: {:?}", imports);
+        
+        // Test 2: Find imported symbols from Utils  
+        let imported_helper = index.find_available_symbols(&main_uri, "helper").await.unwrap();
+        println!("Available helper symbols in main: {:?}", imported_helper);
+        assert!(!imported_helper.is_empty(), "Should find helper function from Utils import");
+        
+        let imported_config = index.find_available_symbols(&main_uri, "Config").await.unwrap();
+        assert!(!imported_config.is_empty(), "Should find Config type from Utils import");
+        
+        // Test 3: Should NOT find non-imported symbols
+        let private_fn = index.find_available_symbols(&main_uri, "privateFunction").await.unwrap();
+        assert!(private_fn.is_empty(), "Should NOT find privateFunction (not imported)");
+        
+        // Test 4: Test module alias resolution (Array as Arr)
+        // This would need qualified symbol names like "Arr.map" to work properly
+        
+        // Test 5: Find modules that expose a symbol
+        let modules_with_helper = index.find_modules_exposing_symbol("helper").await.unwrap();
+        assert!(modules_with_helper.contains(&"Utils".to_string()), "Utils should expose helper");
+        
+        // Test 6: Completion symbols
+        let completions = index.find_completion_symbols(&main_uri, "h", 10).await.unwrap();
+        assert!(!completions.is_empty(), "Should find symbols starting with 'h'");
+        
+        // Check that helper is in completions
+        let has_helper = completions.iter().any(|s| s.name == "helper");
+        assert!(has_helper, "Completions should include 'helper' from import");
+        
+        println!("Cross-module resolution test passed!");
+        println!("Found {} local symbols, {} imported symbols", 
+                 local_symbols.len(), imported_helper.len() + imported_config.len());
+        
+        index.close().await;
     }
 }
