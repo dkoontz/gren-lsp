@@ -298,6 +298,14 @@ impl DocumentManager {
     pub fn get_cache_info(&self) -> (usize, usize) {
         (self.closed_documents.cap().get(), self.closed_documents.len())
     }
+
+    /// Get all open documents with their content for workspace operations
+    pub fn get_all_open_documents(&self) -> HashMap<Url, String> {
+        self.open_documents
+            .iter()
+            .map(|(uri, document)| (uri.clone(), document.get_text()))
+            .collect()
+    }
 }
 
 /// Statistics about document manager state

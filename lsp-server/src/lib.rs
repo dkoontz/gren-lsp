@@ -11,6 +11,9 @@ pub mod hover;
 pub mod goto_definition;
 pub mod find_references;
 pub mod document_symbols;
+pub mod code_actions;
+pub mod workspace_symbols;
+pub mod rename;
 pub mod performance;
 
 #[cfg(test)]
@@ -24,3 +27,18 @@ mod goto_definition_integration_tests;
 
 #[cfg(test)]
 mod document_symbols_integration_tests;
+
+#[cfg(test)]
+mod code_actions_integration_tests;
+
+#[cfg(test)]
+mod workspace_symbols_integration_tests;
+
+#[cfg(test)]
+mod rename_integration_tests;
+
+#[cfg(test)]
+mod rename_basic_tests;
+
+#[cfg(test)]
+mod rename_comprehensive_tests;

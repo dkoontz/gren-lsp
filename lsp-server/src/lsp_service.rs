@@ -6,6 +6,9 @@ use crate::hover::HoverEngine;
 use crate::goto_definition::GotoDefinitionEngine;
 use crate::find_references::FindReferencesEngine;
 use crate::document_symbols::DocumentSymbolsEngine;
+use crate::code_actions::CodeActionsEngine;
+use crate::workspace_symbols::WorkspaceSymbolEngine;
+use crate::rename::{RenameEngine, PrepareRenameParams};
 use crate::symbol_index::SymbolIndex;
 // use crate::performance::{PerformanceManager, PerformanceStats};
 use std::collections::HashMap;
@@ -36,6 +39,12 @@ pub struct GrenLspService {
     find_references_engine: Arc<RwLock<Option<FindReferencesEngine>>>,
     /// Document symbols engine
     document_symbols_engine: Arc<RwLock<Option<DocumentSymbolsEngine>>>,
+    /// Code actions engine
+    code_actions_engine: Arc<RwLock<Option<CodeActionsEngine>>>,
+    /// Workspace symbols engine
+    workspace_symbols_engine: Arc<RwLock<Option<WorkspaceSymbolEngine>>>,
+    /// Rename engine
+    rename_engine: Arc<RwLock<Option<RenameEngine>>>,
     // /// Performance manager for caching and optimization
     // performance_manager: Arc<PerformanceManager>,
 }
@@ -64,6 +73,9 @@ impl GrenLspService {
             goto_definition_engine: Arc::new(RwLock::new(None)),
             find_references_engine: Arc::new(RwLock::new(None)),
             document_symbols_engine: Arc::new(RwLock::new(None)),
+            code_actions_engine: Arc::new(RwLock::new(None)),
+            workspace_symbols_engine: Arc::new(RwLock::new(None)),
+            rename_engine: Arc::new(RwLock::new(None)),
             // performance_manager: Arc::new(PerformanceManager::new(200, 50)), // Reference cache: 200, Parse tree cache: 50
         }
     }
@@ -157,6 +169,19 @@ impl GrenLspService {
                 match FindReferencesEngine::new(symbol_index.clone()) {
                     Ok(find_references_engine) => {
                         info!("Find references engine initialized successfully");
+                        
+                        // Initialize rename engine (creates its own find_references_engine)
+                        debug!("Initializing RenameEngine...");
+                        match RenameEngine::new(symbol_index.clone(), (*self.compiler).clone()) {
+                            Ok(rename_engine) => {
+                                info!("Rename engine initialized successfully");
+                                *self.rename_engine.write().await = Some(rename_engine);
+                            }
+                            Err(e) => {
+                                error!("Failed to initialize rename engine: {}", e);
+                            }
+                        }
+                        
                         *self.find_references_engine.write().await = Some(find_references_engine);
                     }
                     Err(e) => {
@@ -169,6 +194,24 @@ impl GrenLspService {
                 let document_symbols_engine = DocumentSymbolsEngine::new(Arc::new(RwLock::new(Some(symbol_index.clone()))));
                 info!("Document symbols engine initialized successfully");
                 *self.document_symbols_engine.write().await = Some(document_symbols_engine);
+                
+                // Initialize code actions engine
+                debug!("Initializing CodeActionsEngine...");
+                match CodeActionsEngine::new(Arc::new(RwLock::new(Some(symbol_index.clone())))) {
+                    Ok(code_actions_engine) => {
+                        info!("Code actions engine initialized successfully");
+                        *self.code_actions_engine.write().await = Some(code_actions_engine);
+                    }
+                    Err(e) => {
+                        error!("Failed to initialize code actions engine: {}", e);
+                    }
+                }
+                
+                // Initialize workspace symbols engine
+                debug!("Initializing WorkspaceSymbolEngine...");
+                let workspace_symbols_engine = WorkspaceSymbolEngine::new(Arc::new(RwLock::new(Some(symbol_index.clone()))));
+                info!("Workspace symbols engine initialized successfully");
+                *self.workspace_symbols_engine.write().await = Some(workspace_symbols_engine);
                 
                 // Store symbol index after engines are initialized
                 *self.symbol_index.write().await = Some(symbol_index);
@@ -369,9 +412,31 @@ impl LanguageServer for GrenLspService {
                 server_capabilities.references_provider = Some(OneOf::Left(true));
             }
             
+            // Rename: Only advertise if client supports it
+            if let Some(_rename_caps) = &text_doc_caps.rename {
+                server_capabilities.rename_provider = Some(OneOf::Right(RenameOptions {
+                    prepare_provider: Some(true),
+                    work_done_progress_options: Default::default(),
+                }));
+            }
+            
             // Document Symbol: Only advertise if client supports it
             if let Some(_document_symbol_caps) = &text_doc_caps.document_symbol {
                 server_capabilities.document_symbol_provider = Some(OneOf::Left(true));
+            }
+            
+            // Code Action: Only advertise if client supports it
+            if let Some(_code_action_caps) = &text_doc_caps.code_action {
+                server_capabilities.code_action_provider = Some(CodeActionProviderCapability::Options(CodeActionOptions {
+                    code_action_kinds: Some(vec![
+                        CodeActionKind::QUICKFIX,
+                        CodeActionKind::REFACTOR_REWRITE,
+                        CodeActionKind::SOURCE_ORGANIZE_IMPORTS,
+                        CodeActionKind::SOURCE_FIX_ALL,
+                    ]),
+                    work_done_progress_options: Default::default(),
+                    resolve_provider: Some(false),
+                }));
             }
         } else {
             // CLIENT SET text_document TO None
@@ -688,8 +753,160 @@ impl LanguageServer for GrenLspService {
     }
 
     async fn symbol(&self, params: WorkspaceSymbolParams) -> Result<Option<Vec<SymbolInformation>>> {
-        info!("Workspace symbol request for query: {:?}", params.query);
-        Ok(None)
+        info!("🔍 Workspace symbol request for query: '{}'", params.query);
+        
+        // Get workspace symbols engine
+        let workspace_symbols_guard = self.workspace_symbols_engine.read().await;
+        let workspace_symbols_engine = match workspace_symbols_guard.as_ref() {
+            Some(engine) => engine,
+            None => {
+                warn!("Workspace symbols engine not initialized");
+                return Ok(None);
+            }
+        };
+        
+        // Perform workspace symbol search
+        match workspace_symbols_engine.get_workspace_symbols(params).await {
+            Ok(symbols) => {
+                let count = symbols.as_ref().map_or(0, |s| s.len());
+                debug!("Workspace symbol search returned {} results", count);
+                Ok(symbols)
+            }
+            Err(e) => {
+                error!("Failed to get workspace symbols: {}", e);
+                Ok(None) // Return None instead of error to avoid breaking the client
+            }
+        }
+    }
+
+    async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
+        info!("🔧 Code action request at range {:?}", params.range);
+        
+        let uri = &params.text_document.uri;
+        
+        // Get document content
+        let doc_manager = self.document_manager.read().await;
+        let document_content = match doc_manager.get_open_document_content(uri) {
+            Some(content) => content,
+            None => {
+                debug!("Document not found for code action: {}", uri);
+                return Ok(None);
+            }
+        };
+        drop(doc_manager);
+        
+        // Get code actions engine
+        let mut code_actions_engine = self.code_actions_engine.write().await;
+        let code_actions_engine = match code_actions_engine.as_mut() {
+            Some(engine) => engine,
+            None => {
+                debug!("Code actions engine not initialized");
+                return Ok(None);
+            }
+        };
+        
+        // Handle code action request
+        match code_actions_engine.handle_code_action(params, &document_content).await {
+            Ok(response) => {
+                if let Some(ref actions) = response {
+                    debug!("Code actions returned {} items", actions.len());
+                } else {
+                    debug!("Code actions returned no items");
+                }
+                Ok(response)
+            }
+            Err(e) => {
+                error!("Code actions failed: {}", e);
+                Ok(None)
+            }
+        }
+    }
+
+    async fn prepare_rename(&self, params: PrepareRenameParams) -> Result<Option<PrepareRenameResponse>> {
+        info!("🔄 Prepare rename request at {:?}", params.position);
+        
+        let uri = &params.text_document.uri;
+        
+        // Get document content
+        let doc_manager = self.document_manager.read().await;
+        let document_content = match doc_manager.get_open_document_content(uri) {
+            Some(content) => content,
+            None => {
+                debug!("Document not found for prepare rename: {}", uri);
+                return Ok(None);
+            }
+        };
+        drop(doc_manager);
+        
+        // Get rename engine
+        let mut rename_engine = self.rename_engine.write().await;
+        let rename_engine = match rename_engine.as_mut() {
+            Some(engine) => engine,
+            None => {
+                debug!("Rename engine not initialized");
+                return Ok(None);
+            }
+        };
+        
+        // Handle prepare rename request
+        match rename_engine.handle_prepare_rename(params, &document_content).await {
+            Ok(response) => {
+                debug!("Prepare rename completed successfully");
+                Ok(response)
+            }
+            Err(e) => {
+                warn!("Prepare rename failed: {}", e);
+                Ok(None)
+            }
+        }
+    }
+
+    async fn rename(&self, params: RenameParams) -> Result<Option<WorkspaceEdit>> {
+        info!("🔄 Rename request at {:?} to '{}'", params.text_document_position.position, params.new_name);
+        
+        let uri = &params.text_document_position.text_document.uri;
+        
+        // Get document content  
+        let doc_manager = self.document_manager.read().await;
+        let document_content = match doc_manager.get_open_document_content(uri) {
+            Some(content) => content,
+            None => {
+                debug!("Document not found for rename: {}", uri);
+                return Ok(None);
+            }
+        };
+        
+        // Get all open documents for workspace edit
+        let workspace_documents = doc_manager.get_all_open_documents();
+        drop(doc_manager);
+        
+        // Get rename engine
+        let mut rename_engine = self.rename_engine.write().await;
+        let rename_engine = match rename_engine.as_mut() {
+            Some(engine) => engine,
+            None => {
+                debug!("Rename engine not initialized");
+                return Ok(None);
+            }
+        };
+        
+        // Handle rename request
+        match rename_engine.handle_rename(params, &document_content, &workspace_documents).await {
+            Ok(workspace_edit) => {
+                if let Some(ref edit) = workspace_edit {
+                    let change_count = edit.changes.as_ref().map_or(0, |c| c.values().map(|v| v.len()).sum::<usize>());
+                    info!("✅ Rename completed successfully with {} text edits", change_count);
+                } else {
+                    debug!("Rename returned no changes");
+                }
+                Ok(workspace_edit)
+            }
+            Err(e) => {
+                error!("Rename failed: {}", e);
+                // Return error to client for validation failures
+                Err(tower_lsp::jsonrpc::Error::invalid_params(format!("Rename failed: {}", e)))
+            }
+        }
     }
 }
 

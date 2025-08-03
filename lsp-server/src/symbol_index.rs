@@ -878,6 +878,101 @@ impl SymbolIndex {
         Ok(uris)
     }
 
+    /// Search workspace symbols with fuzzy matching
+    /// This is the core method for workspace/symbol LSP requests
+    pub async fn search_workspace_symbols(&self, query: &str, limit: i32) -> Result<Vec<Symbol>> {
+        // If query is empty, return most recently created symbols
+        if query.trim().is_empty() {
+            let symbols = sqlx::query_as::<_, Symbol>(
+                "SELECT * FROM symbols ORDER BY created_at DESC LIMIT ?1"
+            )
+            .bind(limit)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| anyhow!("Failed to query recent symbols: {}", e))?;
+            
+            return Ok(symbols);
+        }
+        
+        let query_lower = query.to_lowercase();
+        
+        // First, try to find exact matches (case insensitive)
+        let exact_matches = sqlx::query_as::<_, Symbol>(
+            "SELECT * FROM symbols WHERE LOWER(name) = ?1 ORDER BY created_at DESC LIMIT ?2"
+        )
+        .bind(&query_lower)
+        .bind(limit / 3) // Reserve 1/3 of results for exact matches
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| anyhow!("Failed to query exact matches: {}", e))?;
+        
+        // Then find prefix matches
+        let prefix_pattern = format!("{}%", query_lower);
+        let prefix_matches = sqlx::query_as::<_, Symbol>(
+            "SELECT * FROM symbols WHERE LOWER(name) LIKE ?1 AND LOWER(name) != ?2 ORDER BY LENGTH(name), name LIMIT ?3"
+        )
+        .bind(&prefix_pattern)
+        .bind(&query_lower)
+        .bind(limit / 3) // Reserve 1/3 for prefix matches
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| anyhow!("Failed to query prefix matches: {}", e))?;
+        
+        // Finally, find fuzzy substring matches
+        let substring_pattern = format!("%{}%", query_lower);
+        let substring_matches = sqlx::query_as::<_, Symbol>(
+            "SELECT * FROM symbols WHERE LOWER(name) LIKE ?1 AND LOWER(name) NOT LIKE ?2 AND LOWER(name) != ?3 ORDER BY LENGTH(name), name LIMIT ?4"
+        )
+        .bind(&substring_pattern)
+        .bind(&prefix_pattern)
+        .bind(&query_lower)
+        .bind(limit / 3) // Reserve 1/3 for fuzzy matches
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| anyhow!("Failed to query substring matches: {}", e))?;
+        
+        // Combine results with exact matches first, then prefix, then substring
+        let mut results = Vec::new();
+        results.extend(exact_matches);
+        results.extend(prefix_matches);
+        results.extend(substring_matches);
+        
+        // Apply fuzzy matching algorithm to further filter and rank
+        let fuzzy_results = self.apply_fuzzy_matching(&results, query, limit as usize);
+        
+        debug!("Workspace symbol search for '{}' returned {} results", query, fuzzy_results.len());
+        Ok(fuzzy_results)
+    }
+    
+    /// Apply fuzzy matching algorithm to rank symbols by relevance
+    fn apply_fuzzy_matching(&self, symbols: &[Symbol], query: &str, limit: usize) -> Vec<Symbol> {
+        let query_lower = query.to_lowercase();
+        let query_chars: Vec<char> = query_lower.chars().collect();
+        
+        // Score each symbol based on fuzzy matching criteria
+        let mut scored_symbols: Vec<(Symbol, i32)> = symbols
+            .iter()
+            .map(|symbol| {
+                let symbol_name_lower = symbol.name.to_lowercase();
+                let score = calculate_fuzzy_score(&symbol_name_lower, &query_chars);
+                (symbol.clone(), score)
+            })
+            .filter(|(_, score)| *score > 0) // Only include symbols with positive scores
+            .collect();
+        
+        // Sort by score (descending) and then by name for stability
+        scored_symbols.sort_by(|a, b| {
+            b.1.cmp(&a.1).then_with(|| a.0.name.cmp(&b.0.name))
+        });
+        
+        // Return top results
+        scored_symbols
+            .into_iter()
+            .take(limit)
+            .map(|(symbol, _)| symbol)
+            .collect()
+    }
+
     /// Close the database pool
     pub async fn close(&self) {
         self.pool.close().await;
@@ -1095,9 +1190,80 @@ impl SymbolIndex {
     }
 }
 
+/// Calculate fuzzy score for workspace symbol matching
+/// Higher scores indicate better matches
+/// Based on LSP spec recommendation for relaxed matching where query characters appear in order
+fn calculate_fuzzy_score(symbol_name: &str, query_chars: &[char]) -> i32 {
+    if query_chars.is_empty() {
+        return 100; // Empty query matches everything
+    }
+    
+    let symbol_name_lower = symbol_name.to_lowercase();
+    let symbol_chars: Vec<char> = symbol_name_lower.chars().collect();
+    let query_lower: Vec<char> = query_chars.iter().map(|c| c.to_ascii_lowercase()).collect();
+    
+    // Exact match gets highest score
+    if symbol_name_lower == query_lower.iter().collect::<String>() {
+        return 1000;
+    }
+    
+    // Check if all query characters appear in order in the symbol name (case insensitive)
+    let mut symbol_idx = 0;
+    let mut query_idx = 0;
+    let mut score = 0;
+    let mut consecutive_matches = 0;
+    let mut last_match_idx = 0;
+    
+    while query_idx < query_lower.len() && symbol_idx < symbol_chars.len() {
+        if query_lower[query_idx] == symbol_chars[symbol_idx] {
+            // Found matching character
+            query_idx += 1;
+            
+            // Bonus for consecutive matches
+            if symbol_idx == last_match_idx + 1 {
+                consecutive_matches += 1;
+                score += 10 + consecutive_matches; // Increasing bonus for consecutive chars
+            } else {
+                consecutive_matches = 0;
+                score += 5; // Base score for any match
+            }
+            
+            // Bonus for matching at word boundaries (capital letters in original)
+            if symbol_idx < symbol_name.len() && symbol_name.chars().nth(symbol_idx).unwrap_or(' ').is_ascii_uppercase() {
+                score += 15;
+            }
+            
+            // Bonus for early matches
+            if symbol_idx < symbol_chars.len() / 2 {
+                score += 3;
+            }
+            
+            last_match_idx = symbol_idx;
+        }
+        symbol_idx += 1;
+    }
+    
+    // If we didn't match all query characters, return 0
+    if query_idx < query_lower.len() {
+        return 0;
+    }
+    
+    // Penalty for long symbol names to prefer shorter matches
+    let length_penalty = symbol_chars.len() as i32 / 10;
+    score = (score - length_penalty).max(1);
+    
+    // Bonus for prefix matches
+    if symbol_name_lower.starts_with(&query_lower.iter().collect::<String>()) {
+        score += 50;
+    }
+    
+    score
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    
 
     #[tokio::test]
     async fn test_symbol_index_creation() {

@@ -16,6 +16,10 @@ mod hover;
 mod goto_definition;
 mod find_references;
 mod document_symbols;
+mod code_actions;
+mod workspace_symbols;
+mod rename;
+mod performance;
 
 use lsp_service::GrenLspService;
 

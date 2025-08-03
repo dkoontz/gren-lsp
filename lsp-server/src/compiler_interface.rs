@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
 use tokio::fs;
 use tokio::process::Command;
 use tracing::{debug, error, info, warn};
@@ -218,16 +219,17 @@ impl TempWorkspace {
 }
 
 /// Interface for interacting with the Gren compiler
+#[derive(Clone)]
 pub struct GrenCompiler {
     config: CompilerConfig,
     /// Semaphore to limit concurrent compilations
-    semaphore: tokio::sync::Semaphore,
+    semaphore: Arc<tokio::sync::Semaphore>,
 }
 
 impl GrenCompiler {
     /// Create a new Gren compiler interface
     pub fn new(config: CompilerConfig) -> Self {
-        let semaphore = tokio::sync::Semaphore::new(config.max_concurrent);
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(config.max_concurrent));
         Self { config, semaphore }
     }
 
@@ -399,10 +401,69 @@ impl GrenCompiler {
         
         // Update semaphore if max concurrent changed
         if old_max_concurrent != self.config.max_concurrent {
-            self.semaphore = tokio::sync::Semaphore::new(self.config.max_concurrent);
+            self.semaphore = Arc::new(tokio::sync::Semaphore::new(self.config.max_concurrent));
             info!("Updated max concurrent compilations from {} to {}", 
                   old_max_concurrent, self.config.max_concurrent);
         }
+    }
+
+    /// Compile a single file for validation purposes
+    pub async fn compile_file(&self, file_path: &std::path::Path) -> Result<CompileResult> {
+        debug!("Compiling file for validation: {:?}", file_path);
+        
+        // Acquire semaphore permit to limit concurrent compilations
+        let _permit = self.semaphore.acquire().await
+            .map_err(|e| anyhow!("Failed to acquire compilation semaphore: {}", e))?;
+        
+        let start_time = std::time::Instant::now();
+        
+        // Run gren compiler on the file
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(self.config.timeout_ms),
+            Command::new(&self.config.compiler_path)
+                .arg("make")
+                .arg(file_path)
+                .arg("--report=json")
+                .arg("--output=/dev/null") // Don't generate output files
+                .current_dir(file_path.parent().unwrap_or(std::path::Path::new(".")))
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .output()
+        ).await;
+        
+        let output = match result {
+            Ok(Ok(output)) => output,
+            Ok(Err(e)) => {
+                return Err(anyhow!("Failed to execute compiler: {}", e));
+            }
+            Err(_) => {
+                return Err(anyhow!("Compilation timed out after {}ms", self.config.timeout_ms));
+            }
+        };
+        
+        let duration = start_time.elapsed();
+        let success = output.status.success();
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let exit_code = output.status.code();
+        
+        debug!(
+            "Compilation {} in {:?} (exit code: {:?})",
+            if success { "succeeded" } else { "failed" },
+            duration,
+            exit_code
+        );
+        
+        if !success {
+            debug!("Compilation stderr: {}", stderr);
+        }
+        
+        Ok(CompileResult {
+            success,
+            output: stdout,
+            stderr,
+            exit_code,
+        })
     }
 }
 
