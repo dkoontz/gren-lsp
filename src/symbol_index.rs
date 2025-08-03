@@ -102,6 +102,7 @@ impl Symbol {
 }
 
 /// Manages the SQLite-based symbol index
+#[derive(Debug, Clone)]
 pub struct SymbolIndex {
     pool: Pool<Sqlite>,
     workspace_root: PathBuf,
@@ -718,7 +719,7 @@ fn symbol_kind_to_i32(kind: SymbolKind) -> i32 {
 }
 
 /// Convert integer back to SymbolKind
-fn i32_to_symbol_kind(kind: i32) -> SymbolKind {
+pub fn i32_to_symbol_kind(kind: i32) -> SymbolKind {
     match kind {
         1 => SymbolKind::FILE,
         2 => SymbolKind::MODULE,
@@ -747,6 +748,22 @@ fn i32_to_symbol_kind(kind: i32) -> SymbolKind {
         25 => SymbolKind::OPERATOR,
         26 => SymbolKind::TYPE_PARAMETER,
         _ => SymbolKind::VARIABLE, // Default fallback
+    }
+}
+
+impl SymbolIndex {
+    /// Test-only constructor for in-memory database
+    #[cfg(test)]
+    pub async fn new_in_memory(workspace_root: PathBuf) -> Result<Self> {
+        let pool = SqlitePool::connect("sqlite::memory:").await
+            .map_err(|e| anyhow!("Failed to connect to in-memory database: {}", e))?;
+        let index = Self {
+            pool,
+            workspace_root,
+        };
+        // Initialize database schema
+        index.initialize_schema().await?;
+        Ok(index)
     }
 }
 

@@ -7,6 +7,11 @@ mod lsp_service;
 mod document_manager;
 mod compiler_interface;
 mod diagnostics;
+mod symbol_index;
+mod tree_sitter_queries;
+mod gren_language;
+mod completion;
+mod scope_analysis;
 
 use lsp_service::GrenLspService;
 

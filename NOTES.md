@@ -17,4 +17,4 @@ Write out your notes on the architecture in ./docs/architecture.md
 
 ## Create slash command for QA to check tests
 
-The dev agent says they are done with Epic 1 Story 4. Analyze the requirements and look at the tests, specifically checking if the assertions made in the tests are actually testing what they claim to be. Be sure to run the tests to see what test are passing. Append your analysis to the Epic 1 Story 4 document in a new section labelled `## QA Analysis`
+The dev agent says they are done with Epic 2 Story 2. Analyze the requirements and look at the tests, specifically checking if the assertions made in the tests are actually testing what they claim to. Be sure to run the tests to see what test are passing. Append your analysis to the Epic 2 Story 2 document in a new section labelled `## QA Analysis`

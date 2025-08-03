@@ -1,6 +1,8 @@
 use crate::document_manager::{DocumentManager, DocumentManagerStats};
 use crate::compiler_interface::{GrenCompiler, CompileRequest, CompilerConfig};
 use crate::diagnostics::{DiagnosticsConverter, diagnostics_utils};
+use crate::completion::CompletionEngine;
+use crate::symbol_index::SymbolIndex;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -17,6 +19,10 @@ pub struct GrenLspService {
     diagnostics_converter: Arc<RwLock<Option<DiagnosticsConverter>>>,
     /// Workspace root for project resolution
     workspace_root: Arc<RwLock<Option<PathBuf>>>,
+    /// Symbol index for cross-module resolution
+    symbol_index: Arc<RwLock<Option<SymbolIndex>>>,
+    /// Completion engine
+    completion_engine: Arc<RwLock<Option<CompletionEngine>>>,
 }
 
 impl GrenLspService {
@@ -37,6 +43,8 @@ impl GrenLspService {
             compiler,
             diagnostics_converter: Arc::new(RwLock::new(None)),
             workspace_root: Arc::new(RwLock::new(None)),
+            symbol_index: Arc::new(RwLock::new(None)),
+            completion_engine: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -83,7 +91,31 @@ impl GrenLspService {
         *self.workspace_root.write().await = Some(root_path.clone());
         
         // Initialize diagnostics converter
-        *self.diagnostics_converter.write().await = Some(DiagnosticsConverter::new(root_path));
+        *self.diagnostics_converter.write().await = Some(DiagnosticsConverter::new(root_path.clone()));
+        
+        // Initialize symbol index
+        let db_path = root_path.join(".gren-lsp").join("symbols.db");
+        match SymbolIndex::new(&db_path, root_path.clone()).await {
+            Ok(symbol_index) => {
+                info!("Symbol index initialized successfully");
+                
+                // Initialize completion engine
+                match CompletionEngine::new(symbol_index.clone()) {
+                    Ok(completion_engine) => {
+                        info!("Completion engine initialized successfully");
+                        *self.symbol_index.write().await = Some(symbol_index);
+                        *self.completion_engine.write().await = Some(completion_engine);
+                    }
+                    Err(e) => {
+                        error!("Failed to initialize completion engine: {}", e);
+                        *self.symbol_index.write().await = Some(symbol_index);
+                    }
+                }
+            }
+            Err(e) => {
+                error!("Failed to initialize symbol index: {}", e);
+            }
+        }
     }
 
     /// Compile a document and publish diagnostics
@@ -289,6 +321,9 @@ impl LanguageServer for GrenLspService {
             
             // Trigger compilation and diagnostics for opened document
             self.compile_and_publish_diagnostics(&uri).await;
+            
+            // Index symbols from the opened document
+            self.index_document_symbols(&uri).await;
         }
     }
 
@@ -308,6 +343,9 @@ impl LanguageServer for GrenLspService {
             
             // Trigger compilation and diagnostics for changed document
             self.compile_and_publish_diagnostics(&uri).await;
+            
+            // Re-index symbols from the changed document
+            self.index_document_symbols(&uri).await;
         }
     }
 
@@ -317,6 +355,9 @@ impl LanguageServer for GrenLspService {
         
         // Trigger compilation and diagnostics for saved document
         self.compile_and_publish_diagnostics(&uri).await;
+        
+        // Re-index symbols from the saved document
+        self.index_document_symbols(&uri).await;
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
@@ -336,7 +377,7 @@ impl LanguageServer for GrenLspService {
         }
     }
 
-    // Placeholder implementations for language features
+    // Language feature implementations
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
         info!("Hover request at {:?}", params.text_document_position_params.position);
         Ok(None)
@@ -344,7 +385,45 @@ impl LanguageServer for GrenLspService {
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         info!("Completion request at {:?}", params.text_document_position.position);
-        Ok(None)
+        
+        let uri = &params.text_document_position.text_document.uri;
+        
+        // Get document content
+        let doc_manager = self.document_manager.read().await;
+        let document_content = match doc_manager.get_open_document_content(uri) {
+            Some(content) => content,
+            None => {
+                debug!("Document not found for completion: {}", uri);
+                return Ok(None);
+            }
+        };
+        drop(doc_manager);
+        
+        // Get completion engine
+        let completion_engine = self.completion_engine.read().await;
+        let completion_engine = match completion_engine.as_ref() {
+            Some(engine) => engine,
+            None => {
+                debug!("Completion engine not initialized");
+                return Ok(None);
+            }
+        };
+        
+        // Handle completion request
+        match completion_engine.handle_completion(params, &document_content).await {
+            Ok(response) => {
+                if let Some(CompletionResponse::Array(ref items)) = response {
+                    debug!("Completion returned {} items", items.len());
+                } else {
+                    debug!("Completion returned no items");
+                }
+                Ok(response)
+            }
+            Err(e) => {
+                error!("Completion failed: {}", e);
+                Ok(None)
+            }
+        }
     }
 
     async fn goto_definition(&self, params: GotoDefinitionParams) -> Result<Option<GotoDefinitionResponse>> {
@@ -365,6 +444,41 @@ impl LanguageServer for GrenLspService {
     async fn symbol(&self, params: WorkspaceSymbolParams) -> Result<Option<Vec<SymbolInformation>>> {
         info!("Workspace symbol request for query: {:?}", params.query);
         Ok(None)
+    }
+}
+
+impl GrenLspService {
+    /// Index symbols from a document
+    async fn index_document_symbols(&self, uri: &Url) {
+        let symbol_index = self.symbol_index.read().await;
+        let symbol_index = match symbol_index.as_ref() {
+            Some(index) => index,
+            None => {
+                debug!("Symbol index not initialized, skipping indexing for {}", uri);
+                return;
+            }
+        };
+
+        // Get document content
+        let doc_manager = self.document_manager.read().await;
+        let document_content = match doc_manager.get_open_document_content(uri) {
+            Some(content) => content,
+            None => {
+                debug!("Document not found for indexing: {}", uri);
+                return;
+            }
+        };
+        drop(doc_manager);
+
+        // Index the document
+        match symbol_index.index_file(uri, &document_content).await {
+            Ok(_) => {
+                debug!("Successfully indexed symbols for {}", uri);
+            }
+            Err(e) => {
+                error!("Failed to index symbols for {}: {}", uri, e);
+            }
+        }
     }
 }
 
