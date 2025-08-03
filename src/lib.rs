@@ -7,6 +7,10 @@ pub mod tree_sitter_queries;
 pub mod gren_language;
 pub mod completion;
 pub mod scope_analysis;
+pub mod hover;
 
 #[cfg(test)]
 mod completion_integration_tests;
+
+#[cfg(test)]
+mod hover_integration_tests;

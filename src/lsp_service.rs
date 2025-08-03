@@ -2,6 +2,7 @@ use crate::document_manager::{DocumentManager, DocumentManagerStats};
 use crate::compiler_interface::{GrenCompiler, CompileRequest, CompilerConfig};
 use crate::diagnostics::{DiagnosticsConverter, diagnostics_utils};
 use crate::completion::CompletionEngine;
+use crate::hover::HoverEngine;
 use crate::symbol_index::SymbolIndex;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -23,6 +24,8 @@ pub struct GrenLspService {
     symbol_index: Arc<RwLock<Option<SymbolIndex>>>,
     /// Completion engine
     completion_engine: Arc<RwLock<Option<CompletionEngine>>>,
+    /// Hover engine
+    hover_engine: Arc<RwLock<Option<HoverEngine>>>,
 }
 
 impl GrenLspService {
@@ -45,6 +48,7 @@ impl GrenLspService {
             workspace_root: Arc::new(RwLock::new(None)),
             symbol_index: Arc::new(RwLock::new(None)),
             completion_engine: Arc::new(RwLock::new(None)),
+            hover_engine: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -103,14 +107,26 @@ impl GrenLspService {
                 match CompletionEngine::new(symbol_index.clone()) {
                     Ok(completion_engine) => {
                         info!("Completion engine initialized successfully");
-                        *self.symbol_index.write().await = Some(symbol_index);
                         *self.completion_engine.write().await = Some(completion_engine);
                     }
                     Err(e) => {
                         error!("Failed to initialize completion engine: {}", e);
-                        *self.symbol_index.write().await = Some(symbol_index);
                     }
                 }
+                
+                // Initialize hover engine
+                match HoverEngine::new(symbol_index.clone()) {
+                    Ok(hover_engine) => {
+                        info!("Hover engine initialized successfully");
+                        *self.hover_engine.write().await = Some(hover_engine);
+                    }
+                    Err(e) => {
+                        error!("Failed to initialize hover engine: {}", e);
+                    }
+                }
+                
+                // Store symbol index after engines are initialized
+                *self.symbol_index.write().await = Some(symbol_index);
             }
             Err(e) => {
                 error!("Failed to initialize symbol index: {}", e);
@@ -380,7 +396,45 @@ impl LanguageServer for GrenLspService {
     // Language feature implementations
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
         info!("Hover request at {:?}", params.text_document_position_params.position);
-        Ok(None)
+        
+        let uri = &params.text_document_position_params.text_document.uri;
+        
+        // Get document content
+        let doc_manager = self.document_manager.read().await;
+        let document_content = match doc_manager.get_open_document_content(uri) {
+            Some(content) => content,
+            None => {
+                debug!("Document not found for hover: {}", uri);
+                return Ok(None);
+            }
+        };
+        drop(doc_manager);
+        
+        // Get hover engine
+        let mut hover_engine = self.hover_engine.write().await;
+        let hover_engine = match hover_engine.as_mut() {
+            Some(engine) => engine,
+            None => {
+                debug!("Hover engine not initialized");
+                return Ok(None);
+            }
+        };
+        
+        // Handle hover request
+        match hover_engine.handle_hover(params, &document_content).await {
+            Ok(response) => {
+                if response.is_some() {
+                    debug!("Hover returned information");
+                } else {
+                    debug!("Hover returned no information");
+                }
+                Ok(response)
+            }
+            Err(e) => {
+                error!("Hover failed: {}", e);
+                Ok(None)
+            }
+        }
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
