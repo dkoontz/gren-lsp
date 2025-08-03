@@ -38,37 +38,42 @@ vscode-install:
 
 # Build LSP server and install VS Code extension
 vscode-dev: vscode-build vscode-install
-    code "$(pwd)/test-projects/application"
+    code "$(pwd)/dev-tools/test-data/gren-example-projects/application"
     @echo "✅ LSP server built and VS Code extension installed!"
     @echo "💡 You can now open a Gren project in VS Code to test the extension"
 
 # Rust LSP Server Commands
 build:
-    cargo build
+    cd lsp-server && cargo build
 
 build-release:
-    cargo build --release
+    cd lsp-server && cargo build --release
 
 test:
-    cargo test
+    cd lsp-server && cargo test
 
 test-integration:
-    cargo test --test integration
+    cd lsp-server && cargo test --test integration
 
 run:
-    cargo run
+    cd lsp-server && cargo run
+
+run-debug:
+    cd lsp-server && RUST_LOG=debug cargo run
 
 check:
-    cargo check
+    cd lsp-server && cargo check
 
 fmt:
-    cargo fmt
+    cd lsp-server && cargo fmt
+
+lint: clippy
 
 clippy:
-    cargo clippy -- -D warnings
+    cd lsp-server && cargo clippy -- -D warnings
 
 clean:
-    cargo clean
+    cd lsp-server && cargo clean
 
 # Aliases for common commands
 alias b := build

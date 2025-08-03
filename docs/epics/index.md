@@ -7,26 +7,36 @@ This directory contains the epic and user story breakdown for the Gren LSP serve
 ## Epic Roadmap
 
 ### 🎯 **Epic 1: Foundation & Testing** 
-**Status**: Ready for Implementation  
+**Status**: Completed  
 **Value**: Establish reliable LSP communication and document management foundation
 
 | Story | Description | Status |
 |-------|-------------|--------|
-| [Story 1](stories/epic-1-story-1-treesitter-baseline.md) | Tree-sitter AST Baseline | In Progress |
-| [Story 2](stories/epic-1-story-2-lsp-service.md) | Core LSP Service Foundation with Tests | Pending |
-| [Story 3](stories/epic-1-story-3-document-lifecycle.md) | Document Lifecycle Management | Pending |
-| [Story 4](stories/epic-1-story-4-compiler-integration.md) | Basic Compiler Integration & Diagnostics | Pending |
+| [Story 1](stories/epic-1-story-1-treesitter-baseline.md) | Tree-sitter AST Baseline | Completed |
+| [Story 2](stories/epic-1-story-2-lsp-service.md) | Core LSP Service Foundation with Tests | Completed |
+| [Story 3](stories/epic-1-story-3-document-lifecycle.md) | Document Lifecycle Management | Completed |
+| [Story 4](stories/epic-1-story-4-compiler-integration.md) | Basic Compiler Integration & Diagnostics | Completed |
 
 ### 🧠 **Epic 2: Core Language Intelligence**
-**Status**: Planned  
+**Status**: Completed  
 **Value**: Essential developer assistance features (completion, hover, go-to-definition)
 
 | Story | Description | Status |
 |-------|-------------|--------|
-| [Story 1](stories/epic-2-story-1-symbol-indexing.md) | Symbol Indexing & Cross-Module Resolution | Pending |
-| [Story 2](stories/epic-2-story-2-code-completion.md) | Code Completion | Pending |
-| [Story 3](stories/epic-2-story-3-hover-information.md) | Hover Information (100% accuracy) | Pending |
-| [Story 4](stories/epic-2-story-4-goto-definition.md) | Go-to-Definition | Pending |
+| [Story 1](stories/epic-2-story-1-symbol-indexing.md) | Symbol Indexing & Cross-Module Resolution | Completed |
+| [Story 2](stories/epic-2-story-2-code-completion.md) | Code Completion | Completed |
+| [Story 3](stories/epic-2-story-3-hover-information.md) | Hover Information (100% accuracy) | Completed |
+| [Story 4](stories/epic-2-story-4-goto-definition.md) | Go-to-Definition | Completed |
+
+### 🔍 **Epic 3: Advanced Navigation & References**
+**Status**: Ready for Implementation  
+**Value**: Complete essential LSP feature set with Find References and Document Symbols
+
+| Story | Description | Status |
+|-------|-------------|--------|
+| [Story 1](stories/epic-3-story-1-find-references.md) | Find All References Implementation | Pending |
+| [Story 2](stories/epic-3-story-2-document-symbols.md) | Document Symbol Hierarchy | Pending |
+| [Story 3](stories/epic-3-story-3-performance-optimization.md) | Performance Optimization & Large Project Support | Pending |
 
 ## Epic Success Criteria
 
@@ -42,6 +52,13 @@ This directory contains the epic and user story breakdown for the Gren LSP serve
 - **Hover shows accurate type information for 100% of symbols**
 - Go-to-definition navigates correctly with 100% precision (no false positives)
 - All language features handle Gren's deterministic semantics correctly
+
+### Epic 3 Success Criteria
+- Find References returns 100% accurate results with zero false positives
+- Document Symbols provides complete hierarchical navigation for all Gren constructs
+- Find References: < 200ms response time for 95% of requests
+- Document Symbols: < 100ms response time for 95% of requests
+- Handles projects with 100+ files effectively
 
 ## Implementation Dependencies
 

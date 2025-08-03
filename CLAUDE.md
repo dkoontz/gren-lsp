@@ -6,14 +6,40 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is a Language Server Protocol (LSP) implementation for the Gren programming language, built in Rust. Gren is a pure functional programming language forked from Elm, featuring immutable data structures, no runtime exceptions, and array-first data model.
 
+## Project Structure
+
+The project is organized into clear components:
+
+- **`lsp-server/`** - Rust LSP server implementation
+  - `src/` - LSP server source code
+  - `tests/` - Integration tests
+  - `Cargo.toml` - Rust project configuration
+- **`editor-extensions/`** - Editor integrations
+  - `vscode/` - VS Code extension
+- **`tree-sitter-gren/`** - Tree-sitter grammar for Gren
+- **`docs/`** - Project documentation, architecture, epics
+- **`dev-tools/test-data/`** - Test fixtures and sample projects
+  - `gren-example-projects/` - Sample Gren projects for testing
+  - `gren-samples/` - Simple Gren test files
+  - `lsp-messages/` - LSP protocol test messages
+
 ## Common Development Commands
 
-
+### LSP Server (Rust)
+- `just build` - Build LSP server (equivalent to `cd lsp-server && cargo build`)
+- `just test` - Run all tests
+- `just test-integration` - Run integration tests only
+- `just run` - Run LSP server
+- `just run-debug` - Run with debug logging
+- `just check` - Check code without building
+- `just fmt` - Format code
+- `just lint` - Run clippy linter
 
 ### VS Code Extension
 - `just vscode-build` - Build VS Code extension
 - `just vscode-package` - Package extension as .vsix
 - `just vscode-watch` - Watch extension development
+- `just vscode-dev` - Build LSP server and install VS Code extension
 
 ## Architecture
 
@@ -26,7 +52,7 @@ This is a Language Server Protocol (LSP) implementation for the Gren programming
 - **Clean up temporary scripts** - Always clean up any temporary scripts or files before completing a task
 
 ### LSP documentation
-The LSP spec is available in the `.docs/lsp-spec/3.18` folder. The documentation is broken out according to message types and pages are linked using `{% include types/uri.md %}` directives that indicate the contents of another file should be inserted at that point in the document.
+The LSP spec is available in the `docs/lsp-spec/3.18` folder. The documentation is broken out according to message types and pages are linked using `{% include types/uri.md %}` directives that indicate the contents of another file should be inserted at that point in the document.
 
 ### Gren Language Characteristics
 - Pure functional with no exceptions (uses Maybe/Result types)
@@ -44,3 +70,27 @@ The LSP spec is available in the `.docs/lsp-spec/3.18` folder. The documentation
 - SQLite database for persistent symbol indexing
 - Async processing to prevent editor blocking
 - Incremental parsing with tree-sitter for efficiency
+
+## Current Project Status
+
+### Completed Epics
+- **Epic 1: Foundation & Testing** ✅ - LSP server lifecycle, document management, tree-sitter baseline
+- **Epic 2: Core Language Intelligence** ✅ - Symbol indexing, code completion, hover, go-to-definition
+
+### Current Epic
+- **Epic 3: Advanced Navigation & References** - In Progress
+  - Story 1: Find All References Implementation (textDocument/references)
+  - Story 2: Document Symbol Hierarchy (textDocument/documentSymbol)  
+  - Story 3: Performance Optimization & Large Project Support
+
+### Future Epics
+- **Epic 4: Polish and Enhancement** - Code actions, workspace symbols, rename
+- **Epic 5: VS Code Extension Integration** - Marketplace publication and user experience
+
+## Test Projects and Data
+
+- **Example Projects**: Located in `dev-tools/test-data/gren-example-projects/`
+  - `application/` - Simple Gren application for testing
+  - `package/` - Complex Gren package with multiple modules
+- **Test Samples**: Located in `dev-tools/test-data/gren-samples/`
+- **LSP Test Messages**: Located in `dev-tools/test-data/lsp-messages/`
