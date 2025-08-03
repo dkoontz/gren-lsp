@@ -131,6 +131,7 @@ impl LspTestClient {
                     hover: Some(HoverClientCapabilities::default()),
                     completion: Some(CompletionClientCapabilities::default()),
                     definition: Some(GotoCapability::default()),
+                    references: Some(ReferenceClientCapabilities::default()),
                     ..Default::default()
                 }),
                 ..Default::default()

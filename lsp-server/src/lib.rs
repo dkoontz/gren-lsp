@@ -9,6 +9,7 @@ pub mod completion;
 pub mod scope_analysis;
 pub mod hover;
 pub mod goto_definition;
+pub mod find_references;
 
 #[cfg(test)]
 mod completion_integration_tests;

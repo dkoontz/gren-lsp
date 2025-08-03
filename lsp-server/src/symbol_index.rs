@@ -206,6 +206,37 @@ impl SymbolIndex {
             .await
             .map_err(|e| anyhow!("Failed to create imports module index: {}", e))?;
 
+        // Create symbol_references table for tracking symbol usages
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS symbol_references (
+                id INTEGER PRIMARY KEY,
+                symbol_name TEXT NOT NULL,
+                uri TEXT NOT NULL,
+                range_start_line INTEGER NOT NULL,
+                range_start_char INTEGER NOT NULL,
+                range_end_line INTEGER NOT NULL,
+                range_end_char INTEGER NOT NULL,
+                reference_kind TEXT NOT NULL, -- 'usage', 'declaration', 'definition'
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(|e| anyhow!("Failed to create symbol_references table: {}", e))?;
+
+        // Create indexes for fast reference lookup
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_symbol_references_symbol_name ON symbol_references(symbol_name)")
+            .execute(&self.pool)
+            .await
+            .map_err(|e| anyhow!("Failed to create symbol_references symbol_name index: {}", e))?;
+
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_symbol_references_uri ON symbol_references(uri)")
+            .execute(&self.pool)
+            .await
+            .map_err(|e| anyhow!("Failed to create symbol_references uri index: {}", e))?;
+
         debug!("Database schema initialized successfully");
         Ok(())
     }
@@ -346,6 +377,7 @@ impl SymbolIndex {
         use crate::tree_sitter_queries::GrenQueryEngine;
         use crate::gren_language;
         
+        eprintln!("🔍 INDEXING FILE: {}", uri);
         debug!("Indexing symbols for file: {}", uri);
         
         // Parse the file with tree-sitter
@@ -359,6 +391,12 @@ impl SymbolIndex {
         // Create query engine and extract symbols
         let query_engine = GrenQueryEngine::new()?;
         let symbols = query_engine.extract_symbols(uri, &tree, content)?;
+        eprintln!("🔍 EXTRACTED {} SYMBOLS FROM {}", symbols.len(), uri);
+        debug!("🔍 Extracted {} symbols from {}", symbols.len(), uri);
+        for symbol in &symbols {
+            eprintln!("  - Symbol: '{}' at line {} (kind: {})", symbol.name, symbol.range_start_line, symbol.kind);
+            debug!("  - Symbol: '{}' at line {} (kind: {})", symbol.name, symbol.range_start_line, symbol.kind);
+        }
         
         // Update symbols for this file
         self.update_symbols_for_file(uri, &symbols).await?;
@@ -367,8 +405,18 @@ impl SymbolIndex {
         let imports = query_engine.extract_imports(uri, &tree, content)?;
         self.update_imports_for_file(uri, &imports).await?;
         
-        debug!("Indexed file: {} - added {} symbols and {} imports", 
-               uri, symbols.len(), imports.len());
+        // Extract and store reference information
+        let references = query_engine.extract_references(uri, &tree, content)?;
+        eprintln!("🔍 EXTRACTED {} REFERENCES FROM {}", references.len(), uri);
+        debug!("🔍 Extracted {} references from {}", references.len(), uri);
+        for reference in &references {
+            eprintln!("  - Reference: '{}' at line {} (kind: {})", reference.symbol_name, reference.range_start_line, reference.reference_kind);
+            debug!("  - Reference: '{}' at line {} (kind: {})", reference.symbol_name, reference.range_start_line, reference.reference_kind);
+        }
+        self.update_references_for_file(uri, &references).await?;
+        
+        debug!("Indexed file: {} - added {} symbols, {} imports, and {} references", 
+               uri, symbols.len(), imports.len(), references.len());
         
         Ok(())
     }
@@ -433,10 +481,16 @@ impl SymbolIndex {
             .await
             .map_err(|e| anyhow!("Failed to get import count: {}", e))?;
 
+        let reference_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM symbol_references")
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| anyhow!("Failed to get reference count: {}", e))?;
+
         Ok(IndexStats {
             symbol_count: symbol_count as usize,
             file_count: file_count as usize,
             import_count: import_count as usize,
+            reference_count: reference_count as usize,
         })
     }
     
@@ -478,6 +532,46 @@ impl SymbolIndex {
             .map_err(|e| anyhow!("Failed to commit imports transaction: {}", e))?;
             
         debug!("Updated {} imports for file {}", imports.len(), uri);
+        Ok(())
+    }
+
+    /// Update references for a file (remove old, add new)
+    pub async fn update_references_for_file(&self, uri: &Url, references: &[SymbolReference]) -> Result<()> {
+        let mut tx = self.pool.begin().await
+            .map_err(|e| anyhow!("Failed to begin transaction: {}", e))?;
+
+        // Remove existing references for this file
+        sqlx::query("DELETE FROM symbol_references WHERE uri = ?1")
+            .bind(uri.to_string())
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| anyhow!("Failed to remove old references for file '{}': {}", uri, e))?;
+
+        // Add new references
+        for reference in references {
+            sqlx::query(
+                r#"
+                INSERT INTO symbol_references (symbol_name, uri, range_start_line, range_start_char, 
+                                             range_end_line, range_end_char, reference_kind)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                "#,
+            )
+            .bind(&reference.symbol_name)
+            .bind(&reference.uri)
+            .bind(reference.range_start_line)
+            .bind(reference.range_start_char)
+            .bind(reference.range_end_line)
+            .bind(reference.range_end_char)
+            .bind(&reference.reference_kind)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| anyhow!("Failed to insert reference for '{}': {}", reference.symbol_name, e))?;
+        }
+
+        tx.commit().await
+            .map_err(|e| anyhow!("Failed to commit references transaction: {}", e))?;
+
+        debug!("Updated references for file {}: {} references", uri, references.len());
         Ok(())
     }
 
@@ -626,10 +720,181 @@ impl SymbolIndex {
         Ok(symbols)
     }
 
+    /// Add references for a symbol
+    pub async fn add_references(&self, references: &[SymbolReference]) -> Result<()> {
+        if references.is_empty() {
+            return Ok(());
+        }
+
+        let mut tx = self.pool.begin().await
+            .map_err(|e| anyhow!("Failed to begin transaction: {}", e))?;
+
+        for reference in references {
+            sqlx::query(
+                r#"
+                INSERT INTO symbol_references (symbol_name, uri, range_start_line, range_start_char, 
+                                             range_end_line, range_end_char, reference_kind)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                "#,
+            )
+            .bind(&reference.symbol_name)
+            .bind(&reference.uri)
+            .bind(reference.range_start_line)
+            .bind(reference.range_start_char)
+            .bind(reference.range_end_line)
+            .bind(reference.range_end_char)
+            .bind(&reference.reference_kind)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| anyhow!("Failed to insert reference for '{}': {}", reference.symbol_name, e))?;
+        }
+
+        tx.commit().await
+            .map_err(|e| anyhow!("Failed to commit references batch: {}", e))?;
+
+        debug!("Added {} references to index", references.len());
+        Ok(())
+    }
+
+    /// Find all references to a symbol
+    pub async fn find_references(&self, symbol_name: &str) -> Result<Vec<SymbolReference>> {
+        let references = sqlx::query_as::<_, SymbolReference>(
+            "SELECT * FROM symbol_references WHERE symbol_name = ?1 ORDER BY uri, range_start_line, range_start_char"
+        )
+        .bind(symbol_name)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| anyhow!("Failed to query references for '{}': {}", symbol_name, e))?;
+
+        Ok(references)
+    }
+
+    /// Find references in a specific file
+    pub async fn find_references_in_file(&self, symbol_name: &str, uri: &Url) -> Result<Vec<SymbolReference>> {
+        let references = sqlx::query_as::<_, SymbolReference>(
+            "SELECT * FROM symbol_references WHERE symbol_name = ?1 AND uri = ?2 ORDER BY range_start_line, range_start_char"
+        )
+        .bind(symbol_name)
+        .bind(uri.to_string())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| anyhow!("Failed to query references for '{}' in file '{}': {}", symbol_name, uri, e))?;
+
+        Ok(references)
+    }
+
+    /// Remove all references for a specific file
+    pub async fn remove_references_for_file(&self, uri: &Url) -> Result<u64> {
+        let result = sqlx::query("DELETE FROM symbol_references WHERE uri = ?1")
+            .bind(uri.to_string())
+            .execute(&self.pool)
+            .await
+            .map_err(|e| anyhow!("Failed to remove references for file '{}': {}", uri, e))?;
+
+        debug!("Removed {} references for file {}", result.rows_affected(), uri);
+        Ok(result.rows_affected())
+    }
+
+    /// Get all file URIs that have been indexed
+    pub async fn get_indexed_files(&self) -> Result<Vec<Url>> {
+        let file_uris: Vec<(String,)> = sqlx::query_as(
+            "SELECT DISTINCT uri FROM symbols ORDER BY uri"
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| anyhow!("Failed to get indexed files: {}", e))?;
+
+        let mut uris = Vec::new();
+        for (uri_string,) in file_uris {
+            match Url::parse(&uri_string) {
+                Ok(uri) => uris.push(uri),
+                Err(e) => debug!("Failed to parse URI '{}': {}", uri_string, e),
+            }
+        }
+
+        Ok(uris)
+    }
+
     /// Close the database pool
     pub async fn close(&self) {
         self.pool.close().await;
         info!("Symbol index database closed");
+    }
+}
+
+/// Represents a reference to a symbol
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct SymbolReference {
+    pub id: Option<i64>,
+    pub symbol_name: String,
+    pub uri: String,
+    pub range_start_line: i32,
+    pub range_start_char: i32,
+    pub range_end_line: i32,
+    pub range_end_char: i32,
+    pub reference_kind: String, // 'usage', 'declaration', 'definition'
+    pub created_at: Option<String>,
+}
+
+impl SymbolReference {
+    /// Create a new symbol reference
+    pub fn new(
+        symbol_name: String,
+        uri: &Url,
+        range: Range,
+        reference_kind: ReferenceKind,
+    ) -> Self {
+        Self {
+            id: None,
+            symbol_name,
+            uri: uri.to_string(),
+            range_start_line: range.start.line as i32,
+            range_start_char: range.start.character as i32,
+            range_end_line: range.end.line as i32,
+            range_end_char: range.end.character as i32,
+            reference_kind: reference_kind.to_string(),
+            created_at: None,
+        }
+    }
+
+    /// Convert to LSP Location
+    pub fn to_location(&self) -> Result<Location> {
+        let uri = Url::parse(&self.uri)
+            .map_err(|e| anyhow!("Invalid URI in reference: {}", e))?;
+        
+        let range = Range {
+            start: Position {
+                line: self.range_start_line as u32,
+                character: self.range_start_char as u32,
+            },
+            end: Position {
+                line: self.range_end_line as u32,
+                character: self.range_end_char as u32,
+            },
+        };
+
+        Ok(Location { uri, range })
+    }
+}
+
+/// Type of symbol reference
+#[derive(Debug, Clone)]
+pub enum ReferenceKind {
+    /// Symbol usage/reference
+    Usage,
+    /// Symbol declaration (e.g., type annotation)
+    Declaration, 
+    /// Symbol definition (e.g., function body)
+    Definition,
+}
+
+impl ToString for ReferenceKind {
+    fn to_string(&self) -> String {
+        match self {
+            ReferenceKind::Usage => "usage".to_string(),
+            ReferenceKind::Declaration => "declaration".to_string(),
+            ReferenceKind::Definition => "definition".to_string(),
+        }
     }
 }
 
@@ -639,6 +904,7 @@ pub struct IndexStats {
     pub symbol_count: usize,
     pub file_count: usize,
     pub import_count: usize,
+    pub reference_count: usize,
 }
 
 /// Import information for cross-module resolution

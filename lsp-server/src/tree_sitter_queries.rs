@@ -4,7 +4,7 @@ use tree_sitter::{Query, QueryCursor, Tree, Node};
 use tracing::debug;
 use url::Url;
 
-use crate::symbol_index::Symbol;
+use crate::symbol_index::{Symbol, SymbolReference, ReferenceKind};
 use crate::gren_language;
 
 /// Tree-sitter query engine for extracting symbols from Gren AST
@@ -20,6 +20,8 @@ pub struct GrenQueryEngine {
     constant_query: Query,
     /// Query for extracting module declarations
     module_query: Query,
+    /// Query for extracting symbol references/usages
+    reference_query: Query,
     /// Tree-sitter language for Gren
     language: tree_sitter::Language,
 }
@@ -104,6 +106,47 @@ impl GrenQueryEngine {
           exposing: (exposing_list) @module.exposing) @module.declaration
         "#;
 
+        // Reference/usage query - finds all symbol usages AND declarations
+        let reference_query_str = r#"
+        ; Function declarations (as reference points)
+        (value_declaration
+          functionDeclarationLeft: (function_declaration_left
+            (lower_case_identifier) @ref.declaration))
+
+        ; Function calls and references (via value_qid)
+        (value_expr 
+          name: (value_qid) @ref.function)
+
+        ; Variable references (via lower_case_identifier within value_qid)
+        (value_qid
+          (lower_case_identifier) @ref.variable)
+
+        ; Type references in type annotations
+        (type_expression
+          (type_ref
+            (upper_case_qid) @ref.type))
+
+        ; Type references in constructor patterns
+        (pattern
+          (union_pattern
+            (upper_case_qid) @ref.constructor))
+
+        ; Field access references
+        (field_access_expr
+          target: (_) @ref.target)
+
+        ; Pattern variable references with 'as' keyword  
+        (pattern
+          patternAs: (lower_pattern) @ref.pattern_alias)
+
+        ; Record base references in record expressions
+        (record_base_identifier) @ref.record_base
+
+        ; Record field references in field definitions
+        (field
+          name: (lower_case_identifier) @ref.record_field)
+        "#;
+
         let function_query = Query::new(&language, function_query_str)
             .map_err(|e| anyhow!("Failed to compile function query: {}", e))?;
 
@@ -119,12 +162,16 @@ impl GrenQueryEngine {
         let module_query = Query::new(&language, module_query_str)
             .map_err(|e| anyhow!("Failed to compile module query: {}", e))?;
 
+        let reference_query = Query::new(&language, reference_query_str)
+            .map_err(|e| anyhow!("Failed to compile reference query: {}", e))?;
+
         Ok(Self {
             function_query,
             type_query,
             import_query,
             constant_query,
             module_query,
+            reference_query,
             language,
         })
     }
@@ -151,6 +198,63 @@ impl GrenQueryEngine {
 
         debug!("Extracted {} symbols from {} with module container '{:?}'", symbols.len(), uri, module_name);
         Ok(symbols)
+    }
+
+    /// Extract all symbol references from a Gren file
+    pub fn extract_references(&self, uri: &Url, tree: &Tree, source: &str) -> Result<Vec<SymbolReference>> {
+        let mut references = Vec::new();
+        let root_node = tree.root_node();
+        
+        let mut cursor = QueryCursor::new();
+        let matches = cursor.matches(&self.reference_query, root_node, source.as_bytes());
+
+        for m in matches {
+            for capture in m.captures {
+                let capture_name = self.reference_query.capture_names()[capture.index as usize];
+                let node_text = get_node_text(capture.node, source);
+                
+                // Skip empty or irrelevant references
+                if node_text.trim().is_empty() || node_text.starts_with('_') {
+                    continue;
+                }
+
+                // Determine reference kind based on capture name
+                let reference_kind = match capture_name {
+                    "ref.declaration" => ReferenceKind::Declaration,
+                    "ref.function" | "ref.variable" | "ref.constructor" => ReferenceKind::Usage,
+                    "ref.type" => ReferenceKind::Usage,
+                    "ref.field" | "ref.target" | "ref.record_field" => ReferenceKind::Usage,
+                    _ => ReferenceKind::Usage, // Default to usage
+                };
+
+                // Convert tree-sitter position to LSP range
+                let start_pos = capture.node.start_position();
+                let end_pos = capture.node.end_position();
+                
+                let range = Range {
+                    start: Position {
+                        line: start_pos.row as u32,
+                        character: start_pos.column as u32,
+                    },
+                    end: Position {
+                        line: end_pos.row as u32,
+                        character: end_pos.column as u32,
+                    },
+                };
+
+                let reference = SymbolReference::new(
+                    node_text,
+                    uri,
+                    range,
+                    reference_kind,
+                );
+
+                references.push(reference);
+            }
+        }
+
+        debug!("Extracted {} references from {}", references.len(), uri);
+        Ok(references)
     }
 
     /// Extract module name from the file

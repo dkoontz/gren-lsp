@@ -14,6 +14,7 @@ mod completion;
 mod scope_analysis;
 mod hover;
 mod goto_definition;
+mod find_references;
 
 use lsp_service::GrenLspService;
 
