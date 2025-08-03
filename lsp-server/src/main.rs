@@ -15,6 +15,7 @@ mod scope_analysis;
 mod hover;
 mod goto_definition;
 mod find_references;
+mod document_symbols;
 
 use lsp_service::GrenLspService;
 

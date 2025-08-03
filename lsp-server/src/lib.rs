@@ -10,6 +10,7 @@ pub mod scope_analysis;
 pub mod hover;
 pub mod goto_definition;
 pub mod find_references;
+pub mod document_symbols;
 
 #[cfg(test)]
 mod completion_integration_tests;
@@ -19,3 +20,6 @@ mod hover_integration_tests;
 
 #[cfg(test)]
 mod goto_definition_integration_tests;
+
+#[cfg(test)]
+mod document_symbols_integration_tests;

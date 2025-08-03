@@ -5,6 +5,7 @@ use crate::completion::CompletionEngine;
 use crate::hover::HoverEngine;
 use crate::goto_definition::GotoDefinitionEngine;
 use crate::find_references::FindReferencesEngine;
+use crate::document_symbols::DocumentSymbolsEngine;
 use crate::symbol_index::SymbolIndex;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -32,6 +33,8 @@ pub struct GrenLspService {
     goto_definition_engine: Arc<RwLock<Option<GotoDefinitionEngine>>>,
     /// Find references engine
     find_references_engine: Arc<RwLock<Option<FindReferencesEngine>>>,
+    /// Document symbols engine
+    document_symbols_engine: Arc<RwLock<Option<DocumentSymbolsEngine>>>,
 }
 
 impl GrenLspService {
@@ -57,6 +60,7 @@ impl GrenLspService {
             hover_engine: Arc::new(RwLock::new(None)),
             goto_definition_engine: Arc::new(RwLock::new(None)),
             find_references_engine: Arc::new(RwLock::new(None)),
+            document_symbols_engine: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -150,6 +154,12 @@ impl GrenLspService {
                         error!("Failed to initialize find references engine: {}", e);
                     }
                 }
+                
+                // Initialize document symbols engine
+                debug!("Initializing DocumentSymbolsEngine...");
+                let document_symbols_engine = DocumentSymbolsEngine::new(Arc::new(RwLock::new(Some(symbol_index.clone()))));
+                info!("Document symbols engine initialized successfully");
+                *self.document_symbols_engine.write().await = Some(document_symbols_engine);
                 
                 // Store symbol index after engines are initialized
                 *self.symbol_index.write().await = Some(symbol_index);
@@ -646,7 +656,26 @@ impl LanguageServer for GrenLspService {
 
     async fn document_symbol(&self, params: DocumentSymbolParams) -> Result<Option<DocumentSymbolResponse>> {
         info!("Document symbol request for {:?}", params.text_document.uri);
-        Ok(None)
+        
+        let document_symbols_engine = self.document_symbols_engine.read().await;
+        let document_symbols_engine = match document_symbols_engine.as_ref() {
+            Some(engine) => engine,
+            None => {
+                debug!("Document symbols engine not initialized");
+                return Ok(None);
+            }
+        };
+
+        match document_symbols_engine.handle_document_symbol(params).await {
+            Ok(result) => {
+                debug!("Document symbols request completed successfully");
+                Ok(result)
+            }
+            Err(e) => {
+                error!("Failed to handle document symbols request: {}", e);
+                Ok(None)
+            }
+        }
     }
 
     async fn symbol(&self, params: WorkspaceSymbolParams) -> Result<Option<Vec<SymbolInformation>>> {
