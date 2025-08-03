@@ -11,6 +11,7 @@ pub mod hover;
 pub mod goto_definition;
 pub mod find_references;
 pub mod document_symbols;
+pub mod performance;
 
 #[cfg(test)]
 mod completion_integration_tests;

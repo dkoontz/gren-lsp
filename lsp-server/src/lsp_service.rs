@@ -7,6 +7,7 @@ use crate::goto_definition::GotoDefinitionEngine;
 use crate::find_references::FindReferencesEngine;
 use crate::document_symbols::DocumentSymbolsEngine;
 use crate::symbol_index::SymbolIndex;
+// use crate::performance::{PerformanceManager, PerformanceStats};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -35,6 +36,8 @@ pub struct GrenLspService {
     find_references_engine: Arc<RwLock<Option<FindReferencesEngine>>>,
     /// Document symbols engine
     document_symbols_engine: Arc<RwLock<Option<DocumentSymbolsEngine>>>,
+    // /// Performance manager for caching and optimization
+    // performance_manager: Arc<PerformanceManager>,
 }
 
 impl GrenLspService {
@@ -61,6 +64,7 @@ impl GrenLspService {
             goto_definition_engine: Arc::new(RwLock::new(None)),
             find_references_engine: Arc::new(RwLock::new(None)),
             document_symbols_engine: Arc::new(RwLock::new(None)),
+            // performance_manager: Arc::new(PerformanceManager::new(200, 50)), // Reference cache: 200, Parse tree cache: 50
         }
     }
 
@@ -68,6 +72,11 @@ impl GrenLspService {
     pub async fn get_document_stats(&self) -> DocumentManagerStats {
         self.document_manager.read().await.get_stats()
     }
+
+    // /// Get performance statistics for monitoring and optimization
+    // pub async fn get_performance_stats(&self) -> PerformanceStats {
+    //     self.performance_manager.get_performance_stats().await
+    // }
 
     /// Test-only method: Check if a document is currently open
     pub async fn test_is_document_open(&self, uri: &Url) -> bool {

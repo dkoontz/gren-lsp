@@ -162,7 +162,8 @@ impl SymbolIndex {
         .await
         .map_err(|e| anyhow!("Failed to create symbols table: {}", e))?;
 
-        // Create indexes for performance
+        // Create indexes for performance optimization
+        // Primary single-column indexes
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name)")
             .execute(&self.pool)
             .await
@@ -177,6 +178,31 @@ impl SymbolIndex {
             .execute(&self.pool)
             .await
             .map_err(|e| anyhow!("Failed to create kind index: {}", e))?;
+
+        // Compound indexes for common query patterns
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_symbols_name_container ON symbols(name, container)")
+            .execute(&self.pool)
+            .await
+            .map_err(|e| anyhow!("Failed to create name-container index: {}", e))?;
+
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_symbols_uri_range ON symbols(uri, range_start_line, range_start_char)")
+            .execute(&self.pool)
+            .await
+            .map_err(|e| anyhow!("Failed to create uri-range index: {}", e))?;
+
+        // Covering index for symbol lookups (try advanced syntax, fallback to basic)
+        let covering_result = sqlx::query("CREATE INDEX IF NOT EXISTS idx_symbols_name_covering ON symbols(name) INCLUDE (kind, uri, range_start_line, range_start_char, range_end_line, range_end_char, container, signature)")
+            .execute(&self.pool)
+            .await;
+        
+        if covering_result.is_err() {
+            // Fallback for SQLite versions that don't support INCLUDE
+            debug!("INCLUDE syntax not supported, using regular compound index");
+            sqlx::query("CREATE INDEX IF NOT EXISTS idx_symbols_name_kind_uri ON symbols(name, kind, uri)")
+                .execute(&self.pool)
+                .await
+                .map_err(|e| anyhow!("Failed to create fallback compound index: {}", e))?;
+        }
 
         // Create imports table for cross-module resolution
         sqlx::query(
@@ -237,6 +263,17 @@ impl SymbolIndex {
             .await
             .map_err(|e| anyhow!("Failed to create symbol_references uri index: {}", e))?;
 
+        // Compound indexes for optimized reference queries
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_symbol_references_name_uri ON symbol_references(symbol_name, uri)")
+            .execute(&self.pool)
+            .await
+            .map_err(|e| anyhow!("Failed to create symbol_references name-uri index: {}", e))?;
+
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_symbol_references_uri_range ON symbol_references(uri, range_start_line, range_start_char)")
+            .execute(&self.pool)
+            .await
+            .map_err(|e| anyhow!("Failed to create symbol_references uri-range index: {}", e))?;
+
         debug!("Database schema initialized successfully");
         Ok(())
     }
@@ -267,12 +304,25 @@ impl SymbolIndex {
         Ok(result.last_insert_rowid())
     }
 
-    /// Add multiple symbols efficiently
+    /// Add multiple symbols efficiently with batching
     pub async fn add_symbols(&self, symbols: &[Symbol]) -> Result<()> {
         if symbols.is_empty() {
             return Ok(());
         }
 
+        // Process in batches of 100 for optimal performance
+        const BATCH_SIZE: usize = 100;
+        
+        for batch in symbols.chunks(BATCH_SIZE) {
+            self.add_symbols_batch(batch).await?;
+        }
+
+        debug!("Added {} symbols to index in batches", symbols.len());
+        Ok(())
+    }
+
+    /// Add a batch of symbols in a single transaction
+    async fn add_symbols_batch(&self, symbols: &[Symbol]) -> Result<()> {
         let mut tx = self.pool.begin().await
             .map_err(|e| anyhow!("Failed to begin transaction: {}", e))?;
 
@@ -302,16 +352,29 @@ impl SymbolIndex {
         tx.commit().await
             .map_err(|e| anyhow!("Failed to commit symbol batch: {}", e))?;
 
-        debug!("Added {} symbols to index", symbols.len());
         Ok(())
     }
 
-    /// Find symbols by name
+    /// Find symbols by name (optimized with limit)
     pub async fn find_symbols_by_name(&self, name: &str) -> Result<Vec<Symbol>> {
         let symbols = sqlx::query_as::<_, Symbol>(
-            "SELECT * FROM symbols WHERE name = ?1 ORDER BY created_at DESC"
+            "SELECT * FROM symbols WHERE name = ?1 ORDER BY created_at DESC LIMIT 50"
         )
         .bind(name)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| anyhow!("Failed to query symbols by name '{}': {}", name, e))?;
+
+        Ok(symbols)
+    }
+
+    /// Find symbols by name with custom limit for performance control
+    pub async fn find_symbols_by_name_limited(&self, name: &str, limit: i32) -> Result<Vec<Symbol>> {
+        let symbols = sqlx::query_as::<_, Symbol>(
+            "SELECT * FROM symbols WHERE name = ?1 ORDER BY created_at DESC LIMIT ?2"
+        )
+        .bind(name)
+        .bind(limit)
         .fetch_all(&self.pool)
         .await
         .map_err(|e| anyhow!("Failed to query symbols by name '{}': {}", name, e))?;
@@ -1019,7 +1082,6 @@ pub fn i32_to_symbol_kind(kind: i32) -> SymbolKind {
 
 impl SymbolIndex {
     /// Test-only constructor for in-memory database
-    #[cfg(test)]
     pub async fn new_in_memory(workspace_root: PathBuf) -> Result<Self> {
         let pool = SqlitePool::connect("sqlite::memory:").await
             .map_err(|e| anyhow!("Failed to connect to in-memory database: {}", e))?;
