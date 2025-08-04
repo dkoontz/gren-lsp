@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## 🚨 BEFORE YOU START: Essential Test Projects
+
+**CRITICAL**: This project includes comprehensive Gren test projects at `dev-tools/test-data/gren-example-projects/` and `dev-tools/test-data/gren-samples/`. These MUST be used for ALL testing and development work instead of creating temporary test files. See the "Test Projects and Data" section below for full details.
+
 ## Project Overview
 
 This is a Language Server Protocol (LSP) implementation for the Gren programming language, built in Rust. Gren is a pure functional programming language forked from Elm, featuring immutable data structures, no runtime exceptions, and array-first data model.
@@ -49,6 +53,7 @@ The project is organized into clear components:
 - **ALWAYS use Justfile commands when possible** - Use `just` commands instead of raw `cargo` or `npm` commands to ensure reproducibility of actions and follow project conventions
 - **IMPERATIVE: Tree-sitter based implementation** - The LSP implementation MUST be based on tree-sitter parse data and NOT on regex or other string matching techniques. This ensures accurate, incremental parsing that respects Gren's syntax structure
 - **CRITICAL: Never lie to the user** - LSP operations that have a single correct answer (like go-to-definition) must either succeed with the correct result or fail/show no result. Due to Gren's deterministic import semantics and absence of polymorphic overloading, there should be almost no "fallback" mechanisms. It's better to show nothing than to show an incorrect result that could confuse developers
+- **MANDATORY: Use existing test projects** - ALWAYS use the pre-built Gren test projects in `dev-tools/test-data/` for testing and development. DO NOT create temporary test files - use the existing comprehensive test suite that covers real Gren project structures
 - **Clean up temporary scripts** - Always clean up any temporary scripts or files before completing a task
 
 ### LSP documentation
@@ -87,10 +92,25 @@ The LSP spec is available in the `docs/lsp-spec/3.18` folder. The documentation 
 - **Epic 4: Polish and Enhancement** - Code actions, workspace symbols, rename
 - **Epic 5: VS Code Extension Integration** - Marketplace publication and user experience
 
-## Test Projects and Data
+## 🧪 CRITICAL: Test Projects and Data
 
-- **Example Projects**: Located in `dev-tools/test-data/gren-example-projects/`
-  - `application/` - Simple Gren application for testing
-  - `package/` - Complex Gren package with multiple modules
-- **Test Samples**: Located in `dev-tools/test-data/gren-samples/`
-- **LSP Test Messages**: Located in `dev-tools/test-data/lsp-messages/`
+**MANDATORY FOR ALL DEVELOPMENT** - This project includes comprehensive pre-built Gren test projects that MUST be used for all testing, development, and validation work.
+
+### Primary Test Projects
+- **`dev-tools/test-data/gren-example-projects/`** - **USE THESE FOR ALL TESTING**
+  - `application/` - Complete Gren application with realistic project structure
+  - `package/` - Complex Gren package with multiple modules, imports, and dependencies
+  - These projects contain real Gren syntax, proper module structures, and representative codebases
+
+### Secondary Test Data  
+- **`dev-tools/test-data/gren-samples/`** - Simple, focused Gren test files for specific feature testing
+- **`dev-tools/test-data/lsp-messages/`** - LSP protocol test messages and mock data
+
+### IMPORTANT: Development Requirements
+- **DO NOT create temporary test files** - Use the existing comprehensive test projects
+- **DO NOT use `tempfile::TempDir` for Gren project testing** - Use the real projects in `dev-tools/test-data/`
+- **For integration tests**: Always point to existing test projects rather than creating synthetic ones
+- **For module rename/refactoring**: Use the multi-module structure in `gren-example-projects/package/`
+- **For basic LSP features**: Use the simple structure in `gren-example-projects/application/`
+
+These test projects ensure realistic testing conditions and prevent developers from creating artificial test scenarios that don't reflect real Gren usage patterns.

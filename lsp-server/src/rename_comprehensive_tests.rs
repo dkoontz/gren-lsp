@@ -222,13 +222,13 @@ capitalizeFirst str =
                 },
                 ReferenceKind::Usage,
             ),
-            // formatName usage within same file (call to capitalizeFirst)
+            // formatName usage within same file (function definition)
             SymbolReference::new(
                 "formatName".to_string(),
                 &helper_uri,
                 Range {
-                    start: Position { line: 3, character: 4 },
-                    end: Position { line: 3, character: 14 },
+                    start: Position { line: 3, character: 0 },
+                    end: Position { line: 3, character: 10 },
                 },
                 ReferenceKind::Usage,
             ),
@@ -315,7 +315,7 @@ capitalizeFirst str =
         let params = RenameParams {
             text_document_position: TextDocumentPositionParams {
                 text_document: TextDocumentIdentifier { uri: user_uri.clone() },
-                position: Position { line: 6, character: 0 }, // createUser function definition
+                position: Position { line: 8, character: 0 }, // createUser function definition
             },
             new_name: "makeUser".to_string(),
             work_done_progress_params: WorkDoneProgressParams::default(),

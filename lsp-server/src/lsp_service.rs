@@ -10,6 +10,8 @@ use crate::code_actions::CodeActionsEngine;
 use crate::workspace_symbols::WorkspaceSymbolEngine;
 use crate::rename::{RenameEngine, PrepareRenameParams};
 use crate::symbol_index::SymbolIndex;
+use crate::module_rename::ModuleRenameEngine;
+use crate::workspace_protocol::WorkspaceProtocolHandler;
 // use crate::performance::{PerformanceManager, PerformanceStats};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -45,6 +47,8 @@ pub struct GrenLspService {
     workspace_symbols_engine: Arc<RwLock<Option<WorkspaceSymbolEngine>>>,
     /// Rename engine
     rename_engine: Arc<RwLock<Option<RenameEngine>>>,
+    /// Workspace protocol handler for file operations
+    workspace_protocol_handler: Arc<WorkspaceProtocolHandler>,
     // /// Performance manager for caching and optimization
     // performance_manager: Arc<PerformanceManager>,
 }
@@ -76,6 +80,7 @@ impl GrenLspService {
             code_actions_engine: Arc::new(RwLock::new(None)),
             workspace_symbols_engine: Arc::new(RwLock::new(None)),
             rename_engine: Arc::new(RwLock::new(None)),
+            workspace_protocol_handler: Arc::new(WorkspaceProtocolHandler::new()),
             // performance_manager: Arc::new(PerformanceManager::new(200, 50)), // Reference cache: 200, Parse tree cache: 50
         }
     }
@@ -212,6 +217,21 @@ impl GrenLspService {
                 let workspace_symbols_engine = WorkspaceSymbolEngine::new(Arc::new(RwLock::new(Some(symbol_index.clone()))));
                 info!("Workspace symbols engine initialized successfully");
                 *self.workspace_symbols_engine.write().await = Some(workspace_symbols_engine);
+                
+                // Initialize workspace protocol handler with module rename engine
+                debug!("Initializing ModuleRenameEngine...");
+                match ModuleRenameEngine::new(
+                    Arc::new(RwLock::new(Some(symbol_index.clone()))),
+                    self.workspace_root.clone(),
+                ) {
+                    Ok(module_rename_engine) => {
+                        self.workspace_protocol_handler.initialize(module_rename_engine).await;
+                        info!("Module rename engine initialized successfully");
+                    }
+                    Err(e) => {
+                        error!("Failed to initialize module rename engine: {}", e);
+                    }
+                }
                 
                 // Store symbol index after engines are initialized
                 *self.symbol_index.write().await = Some(symbol_index);
@@ -445,10 +465,51 @@ impl LanguageServer for GrenLspService {
             // This ensures deterministic, specification-compliant behavior.
         }
         
-        // Workspace Symbol: Only advertise if client supports it
+        // Workspace capabilities
         if let Some(workspace_caps) = &params.capabilities.workspace {
+            // Workspace Symbol: Only advertise if client supports it
             if let Some(_symbol_caps) = &workspace_caps.symbol {
                 server_capabilities.workspace_symbol_provider = Some(OneOf::Left(true));
+            }
+            
+            // File Operations: Advertise willRenameFiles and didRenameFiles support
+            if let Some(_file_ops_caps) = &workspace_caps.file_operations {
+                server_capabilities.workspace = Some(WorkspaceServerCapabilities {
+                    workspace_folders: Some(WorkspaceFoldersServerCapabilities {
+                        supported: Some(true),
+                        change_notifications: Some(OneOf::Left(true)),
+                    }),
+                    file_operations: Some(WorkspaceFileOperationsServerCapabilities {
+                        did_create: None,
+                        will_create: None,
+                        did_rename: Some(FileOperationRegistrationOptions {
+                            filters: vec![FileOperationFilter {
+                                scheme: Some("file".to_string()),
+                                pattern: FileOperationPattern {
+                                    glob: "**/*.gren".to_string(),
+                                    matches: Some(FileOperationPatternKind::File),
+                                    options: Some(FileOperationPatternOptions {
+                                        ignore_case: Some(false),
+                                    }),
+                                },
+                            }],
+                        }),
+                        will_rename: Some(FileOperationRegistrationOptions {
+                            filters: vec![FileOperationFilter {
+                                scheme: Some("file".to_string()),
+                                pattern: FileOperationPattern {
+                                    glob: "**/*.gren".to_string(),
+                                    matches: Some(FileOperationPatternKind::File),
+                                    options: Some(FileOperationPatternOptions {
+                                        ignore_case: Some(false),
+                                    }),
+                                },
+                            }],
+                        }),
+                        did_delete: None,
+                        will_delete: None,
+                    }),
+                });
             }
         }
 
@@ -906,6 +967,50 @@ impl LanguageServer for GrenLspService {
                 // Return error to client for validation failures
                 Err(tower_lsp::jsonrpc::Error::invalid_params(format!("Rename failed: {}", e)))
             }
+        }
+    }
+
+    /// Handle workspace/willRenameFiles request
+    async fn will_rename_files(&self, params: RenameFilesParams) -> Result<Option<WorkspaceEdit>> {
+        info!("🔄 Workspace willRenameFiles request with {} files", params.files.len());
+
+        // Get all open documents for context
+        let doc_manager = self.document_manager.read().await;
+        let workspace_documents = doc_manager.get_all_open_documents();
+        drop(doc_manager);
+
+        // Handle the request via workspace protocol handler
+        match self.workspace_protocol_handler.handle_will_rename_files(params, &workspace_documents).await {
+            Ok(workspace_edit) => {
+                if let Some(ref edit) = workspace_edit {
+                    let change_count = edit.changes.as_ref().map_or(0, |c| c.values().map(|v| v.len()).sum::<usize>());
+                    info!("✅ willRenameFiles completed with {} text edits", change_count);
+                } else {
+                    info!("willRenameFiles completed with no changes");
+                }
+                Ok(workspace_edit)
+            }
+            Err(e) => {
+                error!("willRenameFiles failed: {}", e);
+                Err(tower_lsp::jsonrpc::Error::internal_error())
+            }
+        }
+    }
+
+    /// Handle workspace/didRenameFiles notification
+    async fn did_rename_files(&self, params: RenameFilesParams) {
+        info!("📁 Workspace didRenameFiles notification with {} files", params.files.len());
+
+        // Get all open documents for context
+        let doc_manager = self.document_manager.read().await;
+        let workspace_documents = doc_manager.get_all_open_documents();
+        drop(doc_manager);
+
+        // Handle the notification via workspace protocol handler
+        if let Err(e) = self.workspace_protocol_handler.handle_did_rename_files(params, &workspace_documents).await {
+            error!("didRenameFiles failed: {}", e);
+        } else {
+            info!("✅ didRenameFiles completed successfully");
         }
     }
 }

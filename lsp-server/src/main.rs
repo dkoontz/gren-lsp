@@ -20,6 +20,10 @@ mod code_actions;
 mod workspace_symbols;
 mod rename;
 mod performance;
+mod module_rename;
+mod file_operations;
+mod import_rewriter;
+mod workspace_protocol;
 
 use lsp_service::GrenLspService;
 

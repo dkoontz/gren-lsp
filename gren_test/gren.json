@@ -1,0 +1,10 @@
+{
+    "type": "application",
+    "source-directories": ["src"],
+    "gren-version": "0.6.1",
+    "platform": "node",
+    "dependencies": {
+        "direct": {},
+        "indirect": {}
+    }
+}

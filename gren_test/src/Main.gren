@@ -1,0 +1,18 @@
+module Main exposing (main)
+
+main : Platform.Program {} {} {}
+main =
+    Platform.worker
+        { init = init
+        , update = update
+        , subscriptions = subscriptions
+        }
+
+init : {} -> {} 
+init _ = {}
+
+update : {} -> {} -> {}
+update _ _ = {}
+
+subscriptions : {} -> Platform.Sub {}
+subscriptions _ = Platform.Sub.none

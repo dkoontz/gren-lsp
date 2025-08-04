@@ -15,6 +15,10 @@ pub mod code_actions;
 pub mod workspace_symbols;
 pub mod rename;
 pub mod performance;
+pub mod module_rename;
+pub mod file_operations;
+pub mod import_rewriter;
+pub mod workspace_protocol;
 
 #[cfg(test)]
 mod completion_integration_tests;
@@ -42,3 +46,6 @@ mod rename_basic_tests;
 
 #[cfg(test)]
 mod rename_comprehensive_tests;
+
+#[cfg(test)]
+mod module_rename_integration_tests;
