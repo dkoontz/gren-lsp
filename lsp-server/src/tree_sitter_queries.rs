@@ -397,6 +397,7 @@ impl GrenQueryEngine {
                     // Type alias declaration
                     let mut alias_name = String::new();
                     let mut alias_range = Range::default();
+                    let mut alias_type = String::new();
 
                     for capture in m.captures {
                         let capture_name = self.type_query.capture_names()[capture.index as usize];
@@ -408,18 +409,27 @@ impl GrenQueryEngine {
                             "alias.declaration" => {
                                 alias_range = node_to_range(capture.node);
                             }
+                            "alias.type" => {
+                                alias_type = get_node_text(capture.node, source);
+                            }
                             _ => {}
                         }
                     }
 
                     if !alias_name.is_empty() {
+                        let signature = if !alias_type.is_empty() {
+                            format!("alias {} =\n    {}", alias_name, alias_type)
+                        } else {
+                            format!("type alias {}", alias_name)
+                        };
+
                         let symbol = Symbol::new(
                             alias_name.clone(),
-                            SymbolKind::STRUCT, // Type aliases are like structs
+                            SymbolKind::CLASS, // Type aliases are like classes
                             uri,
                             alias_range,
                             container.map(|s| s.to_string()),
-                            Some(format!("type alias {}", alias_name)),
+                            Some(signature),
                             None,
                         );
                         symbols.push(symbol);

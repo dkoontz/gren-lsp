@@ -8,9 +8,10 @@ For every test there should be a single correct answer. We know the exact inputs
 Also look for warnings about unused functions. Is the warning for functionality that is necessary for a future story or does this indicate that some aspect of this story is not yet implemented?
 
 Test checklist
-- Single expected result
-- No OR fallbacks
-- No unexpected error states that are allowed to pass the test
+- The assertion must be for a single expected result (no OR's or fallbacks)
+- The assertion cannot allow multiple possibilities
+- The assertion cannot permit any unexpected errors
+- The assertion must validate the actual result data. Checking the presence of or the count of a result in insufficient unless the action being tested specifically returns a count.
 - Warnings about unused functions may indicate errors if the expected functionality would need those functions
 
 For any issues you find write out exactly where the issue is and what exactly you want the developer to change.

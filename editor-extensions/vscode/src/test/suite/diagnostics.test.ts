@@ -2,6 +2,7 @@ import * as assert from "assert";
 import * as vscode from "vscode";
 import * as path from "path";
 import * as fs from "fs";
+import * as os from "os";
 import { before, after, beforeEach, afterEach } from "mocha";
 import {
   ObservedLSPMessageMonitor,
@@ -141,15 +142,41 @@ brokenFunction name
       // Debug: Check all LSP messages that have been sent
       console.log("🔍 All LSP messages captured:");
       const allMessages = monitor.getAllMessages();
-      allMessages.forEach((msg, index) => {
+      allMessages.forEach((msg: any, index: number) => {
         console.log(`  ${index + 1}. ${msg.method} (${msg.direction}) - ${JSON.stringify(msg.params?.textDocument?.uri || msg.params?.uri || 'no uri')}`);
       });
 
       // Give extra time for LSP server to process the file and generate diagnostics
       console.log("⏳ Waiting for LSP server to process the opened file...");
-      await new Promise((resolve) => setTimeout(resolve, 5000));
+      
+      // Display log file location for debugging
+      const logFilePath = path.join(os.tmpdir(), 'gren-lsp', 'debug.log');
+      console.log(`📄 Debug logs location: ${logFilePath}`);
+      console.log("💡 Check this file for detailed LSP server logs including diagnostics processing");
+      
+      await monitor.waitForDiagnostics(testUri);
 
       const diagnostics = vscode.languages.getDiagnostics(testUri);
+      
+      // If test fails, display recent log entries for debugging
+      if (diagnostics.length === 0) {
+        console.log("\n❌ Test failed - no diagnostics received. Recent log entries:");
+        try {
+          if (fs.existsSync(logFilePath)) {
+            const logContent = fs.readFileSync(logFilePath, 'utf8');
+            const logLines = logContent.split('\n').filter((line: string) => line.trim());
+            const recentLines = logLines.slice(-20); // Last 20 lines
+            recentLines.forEach((line: string, index: number) => {
+              console.log(`  ${recentLines.length - 20 + index + 1}: ${line}`);
+            });
+          } else {
+            console.log("  📄 Log file not found or not created yet");
+          }
+        } catch (error) {
+          console.log(`  ❌ Error reading log file: ${error}`);
+        }
+      }
+      
       assert.ok(
         diagnostics.length > 0,
         "Should receive diagnostics for syntax error",
@@ -159,7 +186,7 @@ brokenFunction name
       const errors = diagnostics.filter(
         (d) => d.severity === vscode.DiagnosticSeverity.Error,
       );
-      assert.ok(errors.length > 0, "Should have at least one error diagnostic");
+      assert.strictEqual(errors.length, 1, "Should have exactly one error diagnostic for syntax error");
       
       // Verify diagnostic properties
       const firstError = errors[0];
@@ -239,7 +266,7 @@ addNumbers x y =
       assert.ok(didOpenMessage, "Should receive LSP didOpen message");
 
       // Wait for LSP processing
-      await new Promise((resolve) => setTimeout(resolve, 3000));
+      await monitor.waitForDiagnostics(testUri);
 
       const diagnostics = vscode.languages.getDiagnostics(testUri);
       assert.ok(
@@ -334,7 +361,7 @@ brokenFunction name
       await monitor.waitForMethod("textDocument/didOpen");
 
       // Wait for initial diagnostics
-      await new Promise((resolve) => setTimeout(resolve, 3000));
+      await monitor.waitForDiagnostics(testUri);
 
       const initialDiagnostics = vscode.languages.getDiagnostics(testUri);
 
@@ -359,18 +386,15 @@ brokenFunction name
       const success = await vscode.workspace.applyEdit(edit);
       assert.ok(success, "Edit should be applied successfully");
 
-      // Wait for LSP to process the change
+      // Wait for LSP to process the change and clear diagnostics
       await monitor.waitForMethod("textDocument/didChange");
-      await new Promise((resolve) => setTimeout(resolve, 3000));
+      await monitor.waitForDiagnosticsCleared(testUri);
 
       const finalDiagnostics = vscode.languages.getDiagnostics(testUri);
 
-      // Diagnostics should be cleared or significantly reduced
-      assert.ok(
-        finalDiagnostics.length < initialDiagnostics.length ||
-          finalDiagnostics.length === 0,
-        "Diagnostics should be cleared or reduced after fixing the error",
-      );
+      // Diagnostics should be completely cleared after fixing the error
+      assert.strictEqual(finalDiagnostics.length, 0, 
+        "All diagnostics should be cleared after fixing the syntax error");
     } finally {
       await cleanupTestFile(testUri);
     }
@@ -441,7 +465,7 @@ result =
       await monitor.waitForMethod("textDocument/didOpen");
 
       // Wait for LSP processing
-      await new Promise((resolve) => setTimeout(resolve, 3000));
+      await monitor.waitForDiagnostics(testUri);
 
       const diagnostics = vscode.languages.getDiagnostics(testUri);
 
@@ -521,7 +545,7 @@ subscriptions model =
       await monitor.waitForMethod("textDocument/didOpen");
 
       // Wait for LSP processing
-      await new Promise((resolve) => setTimeout(resolve, 3000));
+      await monitor.waitForDiagnostics(testUri);
 
       const diagnostics = vscode.languages.getDiagnostics(testUri);
 
@@ -610,7 +634,7 @@ errorFunction name
       await monitor.waitForMethod("textDocument/didOpen");
 
       // Wait for LSP processing
-      await new Promise((resolve) => setTimeout(resolve, 3000));
+      await monitor.waitForDiagnostics(testUri);
 
       const diagnostics = vscode.languages.getDiagnostics(testUri);
 

@@ -262,7 +262,7 @@ dummy = "activation trigger"`;
         testLogger.verbose("❌ Extension not found");
       }
 
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await new Promise((resolve) => setTimeout(resolve, 100));
     }
 
     // Provide detailed error information
@@ -313,11 +313,80 @@ dummy = "activation trigger"`;
       if (message) {
         return message;
       }
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await new Promise((resolve) => setTimeout(resolve, 50));
     }
 
     throw new Error(
       `Timeout waiting for LSP method: ${method}. Captured methods: ${this.getMethodsList()}`,
+    );
+  }
+
+  /**
+   * Wait for diagnostics to be published by the LSP server
+   */
+  async waitForDiagnostics(
+    uri: vscode.Uri,
+    timeoutMs: number = 5000,
+  ): Promise<vscode.Diagnostic[]> {
+    const startTime = Date.now();
+
+    while (Date.now() - startTime < timeoutMs) {
+      const diagnostics = vscode.languages.getDiagnostics(uri);
+      if (diagnostics.length > 0) {
+        return diagnostics;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+
+    throw new Error(
+      `Timeout waiting for diagnostics after ${timeoutMs}ms`,
+    );
+  }
+
+  /**
+   * Wait for diagnostics to be cleared by the LSP server
+   */
+  async waitForDiagnosticsCleared(
+    uri: vscode.Uri,
+    timeoutMs: number = 5000,
+  ): Promise<void> {
+    const startTime = Date.now();
+
+    while (Date.now() - startTime < timeoutMs) {
+      const diagnostics = vscode.languages.getDiagnostics(uri);
+      if (diagnostics.length === 0) {
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+
+    throw new Error(
+      `Timeout waiting for diagnostics to be cleared after ${timeoutMs}ms`,
+    );
+  }
+
+  /**
+   * Wait for symbol indexing to complete after opening a document
+   */
+  async waitForSymbolIndexing(
+    uri: vscode.Uri,
+    timeoutMs: number = 3000,
+  ): Promise<vscode.DocumentSymbol[]> {
+    const startTime = Date.now();
+
+    while (Date.now() - startTime < timeoutMs) {
+      const symbols = await vscode.commands.executeCommand<vscode.DocumentSymbol[]>(
+        'vscode.executeDocumentSymbolProvider',
+        uri
+      );
+      if (symbols && symbols.length > 0) {
+        return symbols;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+
+    throw new Error(
+      `Timeout waiting for symbol indexing after ${timeoutMs}ms`,
     );
   }
 

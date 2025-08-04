@@ -342,7 +342,14 @@ impl CompletionEngine {
             _ => CompletionItemKind::TEXT,
         };
 
-        let detail = if let Some(ref container) = symbol.container {
+        let detail = if let Some(ref signature) = symbol.signature {
+            // Extract just the type part from full signature like "greet : String -> String"
+            if let Some(colon_pos) = signature.find(" : ") {
+                signature[colon_pos + 3..].to_string()
+            } else {
+                signature.clone()
+            }
+        } else if let Some(ref container) = symbol.container {
             format!("from {}", container)
         } else {
             "local".to_string()

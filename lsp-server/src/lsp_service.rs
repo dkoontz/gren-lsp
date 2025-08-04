@@ -60,7 +60,7 @@ impl GrenLspService {
             Ok(compiler) => Arc::new(compiler),
             Err(e) => {
                 // Log warning but continue with default config
-                eprintln!("Warning: Failed to initialize compiler with environment: {}. Using default config.", e);
+                debug!("Warning: Failed to initialize compiler with environment: {}. Using default config.", e);
                 Arc::new(GrenCompiler::new(CompilerConfig::default()))
             }
         };
@@ -244,13 +244,16 @@ impl GrenLspService {
 
     /// Compile a document and publish diagnostics
     async fn compile_and_publish_diagnostics(&self, uri: &Url) {
-        debug!("🔍 Starting diagnostic compilation for: {}", uri);
+        info!("🔍 DIAGNOSTICS: Starting compilation for: {}", uri);
+        
         let _workspace_root = self.workspace_root.read().await.clone();
         let _workspace_root = match _workspace_root {
-            Some(root) => root,
+            Some(root) => {
+                info!("✅ DIAGNOSTICS: Workspace root found: {:?}", root);
+                root
+            },
             None => {
-                debug!("Cannot compile {}: workspace root not initialized", uri);
-                self.client.log_message(MessageType::ERROR, format!("🚨 DIAGNOSTIC GAP: Workspace root not initialized for {}", uri)).await;
+                error!("❌ DIAGNOSTICS: Cannot compile {}: workspace root not initialized", uri);
                 return;
             }
         };
@@ -261,10 +264,12 @@ impl GrenLspService {
         drop(doc_manager);
 
         let document_content = match document_content {
-            Some(content) => content,
+            Some(content) => {
+                debug!("✅ Document content found ({} chars)", content.len());
+                content
+            },
             None => {
                 debug!("Cannot compile {}: document not found", uri);
-                self.client.log_message(MessageType::ERROR, format!("🚨 DIAGNOSTIC GAP: Document not found for {}", uri)).await;
                 return;
             }
         };
@@ -279,11 +284,14 @@ impl GrenLspService {
         };
 
         // Determine project root by searching upward for gren.json
+        debug!("🔍 Searching for project root from: {:?}", file_path);
         let project_root = match crate::compiler_interface::project_utils::find_project_root(&file_path).await {
-            Ok(root) => root,
+            Ok(root) => {
+                debug!("✅ Project root found: {:?}", root);
+                root
+            },
             Err(e) => {
                 debug!("Cannot find project root for {}: {}", uri, e);
-                self.client.log_message(MessageType::ERROR, format!("🚨 DIAGNOSTIC GAP: Cannot find project root for {}: {}", uri, e)).await;
                 return;
             }
         };
@@ -326,37 +334,77 @@ impl GrenLspService {
         };
 
         // Parse compiler output into diagnostics
-        let diagnostics = if compile_result.success {
-            // No errors - clear diagnostics
-            HashMap::new()
-        } else {
-            // Parse errors into diagnostics
-            match self.compiler.parse_compiler_output(&compile_result.output) {
-                Ok(Some(compiler_output)) => {
-                    let converter = self.diagnostics_converter.read().await;
-                    match converter.as_ref() {
-                        Some(converter) => {
-                            match converter.convert_to_diagnostics(&compiler_output) {
-                                Ok(diags) => diags,
-                                Err(e) => {
-                                    error!("Failed to convert compiler output to diagnostics: {}", e);
-                                    HashMap::new()
-                                }
+        // Note: When using --report=json, the Gren compiler returns exit code 0 even for compilation errors,
+        // so we must always parse the JSON output to detect errors regardless of the exit code
+        let raw_diagnostics = match self.compiler.parse_compiler_output(&compile_result.output) {
+            Ok(Some(compiler_output)) => {
+                let converter = self.diagnostics_converter.read().await;
+                match converter.as_ref() {
+                    Some(converter) => {
+                        match converter.convert_to_diagnostics(&compiler_output) {
+                            Ok(diags) => diags,
+                            Err(e) => {
+                                error!("Failed to convert compiler output to diagnostics: {}", e);
+                                HashMap::new()
                             }
                         }
-                        None => {
-                            error!("Diagnostics converter not initialized");
-                            HashMap::new()
-                        }
+                    }
+                    None => {
+                        error!("Diagnostics converter not initialized");
+                        HashMap::new()
                     }
                 }
-                Ok(None) => HashMap::new(),
-                Err(e) => {
-                    error!("Failed to parse compiler output: {}", e);
-                    HashMap::new()
-                }
+            }
+            Ok(None) => {
+                // No JSON output means no errors (successful compilation)
+                HashMap::new()
+            },
+            Err(e) => {
+                error!("Failed to parse compiler output: {}", e);
+                HashMap::new()
             }
         };
+
+        // Remap diagnostic file paths from temporary workspace back to original workspace
+        // This is necessary because the compiler outputs paths in the temporary workspace,
+        // but VS Code needs paths in the original workspace
+        let mut diagnostics = HashMap::new();
+        for (temp_file_uri, file_diagnostics) in raw_diagnostics {
+            // Extract the relative path from the temporary workspace URI
+            // and map it to the original workspace
+            let original_file_uri = if let Ok(temp_path) = temp_file_uri.to_file_path() {
+                // Get the filename from the temporary path (e.g., "SyntaxTest.gren")
+                if let Some(file_name) = temp_path.file_name() {
+                    if let Some(original_path) = uri.to_file_path().ok() {
+                        if let Some(original_parent) = original_path.parent() {
+                            // Reconstruct the original file path
+                            let mapped_path = original_parent.join(file_name);
+                            if let Ok(mapped_uri) = Url::from_file_path(&mapped_path) {
+                                debug!("Mapped diagnostic path: {} -> {}", temp_file_uri, mapped_uri);
+                                mapped_uri
+                            } else {
+                                debug!("Failed to create URI from mapped path: {:?}", mapped_path);
+                                continue;
+                            }
+                        } else {
+                            debug!("Failed to get parent directory from original path: {:?}", original_path);
+                            continue;
+                        }
+                    } else {
+                        debug!("Failed to convert original URI to file path: {}", uri);
+                        continue;
+                    }
+                } else {
+                    debug!("Failed to get filename from temporary path: {:?}", temp_path);
+                    continue;
+                }
+            } else {
+                debug!("Failed to convert temporary URI to file path: {}", temp_file_uri);
+                continue;
+            };
+            
+            diagnostics.insert(original_file_uri, file_diagnostics);
+        }
 
         // Log diagnostics summary
         let (errors, warnings, info, hints) = diagnostics_utils::count_by_severity(&diagnostics);
@@ -533,40 +581,31 @@ impl LanguageServer for GrenLspService {
     async fn initialized(&self, _: InitializedParams) {
         info!("LSP initialized notification received");
         
-        self.client
-            .log_message(MessageType::INFO, "Gren LSP server initialized")
-            .await;
-    }
-
-    async fn shutdown(&self) -> Result<()> {
-        info!("LSP shutdown request received");
-        Ok(())
+        info!("Gren LSP server initialized");
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let uri = params.text_document.uri.clone();
         let version = params.text_document.version;
-        info!("Document opened: {} (version {})", uri, version);
+        info!("🔵 LSP did_open called for: {} (version {})", uri, version);
         
         let mut doc_manager = self.document_manager.write().await;
         if let Err(e) = doc_manager.did_open(params) {
             error!("Failed to open document {}: {}", uri, e);
-            self.client
-                .log_message(MessageType::ERROR, format!("Failed to open document: {}", e))
-                .await;
         } else {
             let stats = doc_manager.get_stats();
             info!("Document manager stats: {} open, {} cached", stats.open_documents, stats.cached_documents);
             drop(doc_manager);
             
             // Trigger compilation and diagnostics for opened document
-            debug!("🚀 Triggering diagnostic compilation for opened document: {}", uri);
-            self.client.log_message(MessageType::INFO, format!("🚀 Starting diagnostic compilation for: {}", uri)).await;
+            info!("🚀 Triggering diagnostic compilation for opened document: {}", uri);
             self.compile_and_publish_diagnostics(&uri).await;
             
             // Index symbols from the opened document
+            info!("📇 Triggering symbol indexing for opened document: {}", uri);
             self.index_document_symbols(&uri).await;
         }
+        info!("🔵 LSP did_open completed for: {}", uri);
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
@@ -585,13 +624,9 @@ impl LanguageServer for GrenLspService {
             }
             Err(e) => {
                 error!("Failed to apply changes to document {}: {:?}", uri, e);
-                self.client
-                    .log_message(MessageType::ERROR, format!("Failed to apply document changes: {}", e.message))
-                    .await;
             }
         }
     }
-
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
         let uri = params.text_document.uri;
@@ -619,6 +654,11 @@ impl LanguageServer for GrenLspService {
             // Clear diagnostics for closed document
             self.client.publish_diagnostics(uri, vec![], None).await;
         }
+    }
+
+    async fn shutdown(&self) -> Result<()> {
+        info!("LSP shutdown request received");
+        Ok(())
     }
 
     // Language feature implementations
@@ -1109,11 +1149,11 @@ impl GrenLspService {
         let doc_manager = self.document_manager.read().await;
         let document_content = match doc_manager.get_open_document_content(uri) {
             Some(content) => {
-                eprintln!("✅ Document content found ({} chars)", content.len());
+                debug!("✅ Document content found ({} chars)", content.len());
                 content
             },
             None => {
-                eprintln!("❌ Document not found for indexing: {}", uri);
+                debug!("❌ Document not found for indexing: {}", uri);
                 debug!("Document not found for indexing: {}", uri);
                 return;
             }

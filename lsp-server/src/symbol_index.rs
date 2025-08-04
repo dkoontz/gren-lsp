@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{Pool, Sqlite, SqlitePool};
 use std::path::{Path, PathBuf};
 use tower_lsp::lsp_types::*;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// Represents a symbol in the index
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
@@ -119,9 +119,20 @@ impl SymbolIndex {
 
         let database_url = format!("sqlite:{}", database_path.display());
         info!("Initializing symbol index database at {}", database_url);
+        debug!("Database path: {:?}", database_path);
+        debug!("Database parent dir: {:?}", database_path.parent());
 
-        let pool = SqlitePool::connect(&database_url).await
-            .map_err(|e| anyhow!("Failed to connect to database: {}", e))?;
+        let pool = match SqlitePool::connect(&database_url).await {
+            Ok(pool) => {
+                info!("Connected to file-based database successfully");
+                pool
+            },
+            Err(e) => {
+                warn!("Failed to connect to file-based database ({}), falling back to in-memory database", e);
+                SqlitePool::connect("sqlite::memory:").await
+                    .map_err(|e| anyhow!("Failed to connect to in-memory database: {}", e))?
+            }
+        };
 
         let index = Self {
             pool,
@@ -440,7 +451,6 @@ impl SymbolIndex {
         use crate::tree_sitter_queries::GrenQueryEngine;
         use crate::gren_language;
         
-        eprintln!("🔍 INDEXING FILE: {}", uri);
         debug!("Indexing symbols for file: {}", uri);
         
         // Parse the file with tree-sitter
@@ -454,10 +464,8 @@ impl SymbolIndex {
         // Create query engine and extract symbols
         let query_engine = GrenQueryEngine::new()?;
         let symbols = query_engine.extract_symbols(uri, &tree, content)?;
-        eprintln!("🔍 EXTRACTED {} SYMBOLS FROM {}", symbols.len(), uri);
         debug!("🔍 Extracted {} symbols from {}", symbols.len(), uri);
         for symbol in &symbols {
-            eprintln!("  - Symbol: '{}' at line {} (kind: {})", symbol.name, symbol.range_start_line, symbol.kind);
             debug!("  - Symbol: '{}' at line {} (kind: {})", symbol.name, symbol.range_start_line, symbol.kind);
         }
         
@@ -470,10 +478,8 @@ impl SymbolIndex {
         
         // Extract and store reference information
         let references = query_engine.extract_references(uri, &tree, content)?;
-        eprintln!("🔍 EXTRACTED {} REFERENCES FROM {}", references.len(), uri);
         debug!("🔍 Extracted {} references from {}", references.len(), uri);
         for reference in &references {
-            eprintln!("  - Reference: '{}' at line {} (kind: {})", reference.symbol_name, reference.range_start_line, reference.reference_kind);
             debug!("  - Reference: '{}' at line {} (kind: {})", reference.symbol_name, reference.range_start_line, reference.reference_kind);
         }
         self.update_references_for_file(uri, &references).await?;

@@ -13,19 +13,31 @@ import {
 } from "vscode-languageclient/node";
 
 import { GrenCompilerManager } from "./compiler-manager";
+import { getLogger, closeLogger, FileLogger } from "./file-logger";
 
 let client: LanguageClient;
 let outputChannel: OutputChannel;
 let compilerManager: GrenCompilerManager;
+let fileLogger: FileLogger;
+
+// Helper function to log to both output channel and file
+function logToAll(message: string): void {
+  outputChannel.appendLine(message);
+  fileLogger.log('Extension', message);
+}
 
 export function activate(context: ExtensionContext) {
   console.log("Gren LSP Extension: Starting activation...");
   
+  // Initialize file logger first (clears previous logs)
+  fileLogger = getLogger();
+  
   // Create output channel for extension logs (LSP client will create server channel automatically)
   outputChannel = window.createOutputChannel("Gren LSP Extension");
   
-  outputChannel.appendLine("Gren LSP Extension starting...");
-  outputChannel.appendLine("📺 Created Extension output channel (LSP client will create Server channel)");
+  logToAll("Gren LSP Extension starting...");
+  logToAll("📺 Created Extension output channel (LSP client will create Server channel)");
+  logToAll(`📄 Debug log file: ${fileLogger.getLogFilePath()}`);
   outputChannel.show(true); // Make sure the output channel is visible
   
   console.log("Gren LSP Extension: Output channel created");
@@ -41,18 +53,18 @@ export function activate(context: ExtensionContext) {
     commands.registerCommand('grenLsp.showCompilerVersion', () => compilerManager.showCompilerVersionCommand()),
     commands.registerCommand('grenLsp.testServerConnection', () => {
       const timestamp = new Date().toISOString().substring(11, 23);
-      outputChannel.appendLine(`🔍 [${timestamp}] Testing server connection...`);
-      outputChannel.appendLine(`   Client state: ${client.state === State.Stopped ? 'Stopped' : client.state === State.Starting ? 'Starting' : 'Running'}`);
+      logToAll(`🔍 [${timestamp}] Testing server connection...`);
+      logToAll(`   Client state: ${client.state === State.Stopped ? 'Stopped' : client.state === State.Starting ? 'Starting' : 'Running'}`);
       
       // Try to send a simple request to test if server responds
       if (client.state === State.Running) {
         client.sendRequest('workspace/diagnostic/refresh').then(() => {
-          outputChannel.appendLine(`✅ [${new Date().toISOString().substring(11, 23)}] Server responded to test request!`);
+          logToAll(`✅ [${new Date().toISOString().substring(11, 23)}] Server responded to test request!`);
         }).catch((error) => {
-          outputChannel.appendLine(`❌ [${new Date().toISOString().substring(11, 23)}] Server failed to respond: ${error}`);
+          logToAll(`❌ [${new Date().toISOString().substring(11, 23)}] Server failed to respond: ${error}`);
         });
       } else {
-        outputChannel.appendLine(`❌ Client is not running - cannot test server connection`);
+        logToAll(`❌ Client is not running - cannot test server connection`);
       }
     })
   );
@@ -83,31 +95,31 @@ export function activate(context: ExtensionContext) {
       )
     ];
     
-    outputChannel.appendLine(`Extension path: ${context.extensionPath}`);
-    outputChannel.appendLine(`Searching for server binary in: ${possiblePaths.join(', ')}`);
+    logToAll(`Extension path: ${context.extensionPath}`);
+    logToAll(`Searching for server binary in: ${possiblePaths.join(', ')}`);
     
     for (const candidatePath of possiblePaths) {
       if (fs.existsSync(candidatePath)) {
-        outputChannel.appendLine(`✅ Found server binary at: ${candidatePath}`);
+        logToAll(`✅ Found server binary at: ${candidatePath}`);
         serverPath = candidatePath;
         break;
       } else {
-        outputChannel.appendLine(`❌ Not found: ${candidatePath}`);
+        logToAll(`❌ Not found: ${candidatePath}`);
       }
     }
     
     if (!serverPath) {
       serverPath = possiblePaths[0]; // Fallback to first option
-      outputChannel.appendLine(`⚠️ No server binary found, using fallback: ${serverPath}`);
+      logToAll(`⚠️ No server binary found, using fallback: ${serverPath}`);
     }
   }
 
-  outputChannel.appendLine(`Using server path: ${serverPath}`);
+  logToAll(`Using server path: ${serverPath}`);
   
   // Check if server binary exists
   if (!fs.existsSync(serverPath)) {
     const errorMsg = `❌ LSP server binary not found at: ${serverPath}`;
-    outputChannel.appendLine(errorMsg);
+    logToAll(errorMsg);
     outputChannel.show(true);
     window.showErrorMessage(errorMsg);
     return;
@@ -116,10 +128,10 @@ export function activate(context: ExtensionContext) {
   // Check if server binary is executable
   try {
     fs.accessSync(serverPath, fs.constants.F_OK | fs.constants.X_OK);
-    outputChannel.appendLine(`✅ Server binary is accessible and executable`);
+    logToAll(`✅ Server binary is accessible and executable`);
   } catch (err) {
     const errorMsg = `❌ LSP server binary is not executable: ${serverPath}`;
-    outputChannel.appendLine(`${errorMsg} - Error: ${err}`);
+    logToAll(`${errorMsg} - Error: ${err}`);
     outputChannel.show(true);
     window.showErrorMessage(errorMsg);
     return;
@@ -147,7 +159,7 @@ export function activate(context: ExtensionContext) {
       fs.accessSync(parseTreeDir, fs.constants.W_OK);
       
       parseTreeArgs = ['--debug-export-trees', parseTreeDir];
-      outputChannel.appendLine(`🌳 Parse tree export enabled, directory: ${parseTreeDir}`);
+      logToAll(`🌳 Parse tree export enabled, directory: ${parseTreeDir}`);
       
       // Show user notification about debug mode
       window.showInformationMessage(
@@ -165,14 +177,14 @@ export function activate(context: ExtensionContext) {
       
     } catch (err) {
       const errorMsg = `❌ Failed to create or access parse tree directory: ${parseTreeDir}`;
-      outputChannel.appendLine(`${errorMsg} - Error: ${err}`);
+      logToAll(`${errorMsg} - Error: ${err}`);
       window.showErrorMessage(`${errorMsg}\\n\\nDisabling parse tree export.`);
       parseTreeArgs = []; // Disable if directory setup fails
     }
   }
   
   // Initialize and start LSP server after resolving compiler
-  outputChannel.appendLine(`🔍 Resolving Gren compiler before starting LSP server...`);
+  logToAll(`🔍 Resolving Gren compiler before starting LSP server...`);
   console.log("Gren LSP Extension: Starting compiler resolution...");
   
   // Wait for compiler resolution before starting server
@@ -181,38 +193,68 @@ export function activate(context: ExtensionContext) {
     
     if (!grenCompilerPath) {
       const errorMsg = `❌ No Gren compiler found. LSP server cannot start without a compiler.`;
-      outputChannel.appendLine(errorMsg);
+      logToAll(errorMsg);
       outputChannel.show(true);
       console.error("Gren LSP Extension: No compiler found");
       window.showErrorMessage(`${errorMsg}\n\nPlease install Gren compiler or use the extension's download feature.`);
       return;
     }
 
-    outputChannel.appendLine(`✅ Gren compiler found: ${grenCompilerPath}`);
-    outputChannel.appendLine(`🚀 Starting LSP server with compiler path...`);
+    logToAll(`✅ Gren compiler found: ${grenCompilerPath}`);
+    logToAll(`🚀 Starting LSP server with compiler path...`);
     console.log("Gren LSP Extension: Starting LSP server with compiler:", grenCompilerPath);
 
     // Configure server executable with the resolved compiler path
     const traceLevel = config.get<string>('trace.server', 'off');
     const rustLogLevel = traceLevel === 'verbose' ? 'gren_lsp=debug' : 'gren_lsp=info';
-    outputChannel.appendLine(`🔧 Server args: ${parseTreeArgs.join(' ')}`);
-    outputChannel.appendLine(`📊 RUST_LOG level: ${rustLogLevel}`);
-    outputChannel.appendLine(`🛠️ GREN_COMPILER_PATH: ${grenCompilerPath}`);
+    logToAll(`🔧 Server args: ${parseTreeArgs.join(' ')}`);
+    logToAll(`📊 RUST_LOG level: ${rustLogLevel}`);
+    logToAll(`🛠️ GREN_COMPILER_PATH: ${grenCompilerPath}`);
     
-    const serverExecutable: Executable = {
-      command: serverPath,
-      args: parseTreeArgs,
-      options: {
-        env: {
-          ...process.env,
-          RUST_LOG: rustLogLevel,
-          // Pass the compiler path to the LSP server via environment variable
-          GREN_COMPILER_PATH: grenCompilerPath
-        }
-      }
+    // Create server options with stderr capture
+    const serverOptions: ServerOptions = () => {
+      return new Promise((resolve, reject) => {
+        const { spawn } = require('child_process');
+        
+        logToAll(`🚀 Spawning LSP server process: ${serverPath} ${parseTreeArgs.join(' ')}`);
+        
+        const serverProcess = spawn(serverPath, parseTreeArgs, {
+          env: {
+            ...process.env,
+            RUST_LOG: rustLogLevel,
+            GREN_COMPILER_PATH: grenCompilerPath
+          },
+          stdio: ['pipe', 'pipe', 'pipe'] // stdin, stdout, stderr
+        });
+        
+        // Capture stderr and redirect to file logger
+        serverProcess.stderr.on('data', (data: Buffer) => {
+          fileLogger.logServerOutput(data.toString());
+        });
+        
+        // Log process startup
+        serverProcess.on('spawn', () => {
+          logToAll(`✅ LSP server process spawned successfully (PID: ${serverProcess.pid})`);
+        });
+        
+        // Handle process errors
+        serverProcess.on('error', (error: Error) => {
+          logToAll(`❌ LSP server process error: ${error.message}`);
+          reject(error);
+        });
+        
+        // Handle process exit
+        serverProcess.on('exit', (code: number | null, signal: string | null) => {
+          logToAll(`🔚 LSP server process exited (code: ${code}, signal: ${signal})`);
+        });
+        
+        // Return the connection to the LSP client
+        resolve({
+          reader: serverProcess.stdout,
+          writer: serverProcess.stdin
+        });
+      });
     };
-
-    const serverOptions: ServerOptions = serverExecutable;
 
     // Options to control the language client
     const clientOptions: LanguageClientOptions = {
@@ -231,13 +273,13 @@ export function activate(context: ExtensionContext) {
       }
     };
     
-    outputChannel.appendLine(`📋 Client options configured:`);
-    outputChannel.appendLine(`  - Document selector: file:gren`);
-    outputChannel.appendLine(`  - File watcher: **/*.gren`);
-    outputChannel.appendLine(`  - Output channel: ${clientOptions.outputChannelName}`);
+    logToAll(`📋 Client options configured:`);
+    logToAll(`  - Document selector: file:gren`);
+    logToAll(`  - File watcher: **/*.gren`);
+    logToAll(`  - Output channel: ${clientOptions.outputChannelName}`);
 
     // Create the language client and start the client.
-    outputChannel.appendLine(`🚀 Creating LSP client...`);
+    logToAll(`🚀 Creating LSP client...`);
     client = new LanguageClient(
       "gren-lsp",
       "Gren Language Server",
@@ -247,7 +289,7 @@ export function activate(context: ExtensionContext) {
 
     // Enable LSP protocol tracing if verbose mode is on
     if (traceLevel === 'verbose') {
-      outputChannel.appendLine(`🔍 Enabling verbose LSP protocol tracing...`);
+      logToAll(`🔍 Enabling verbose LSP protocol tracing...`);
       client.setTrace(Trace.Verbose);
     }
     
@@ -258,13 +300,13 @@ export function activate(context: ExtensionContext) {
       const newState = stateChangeEvent.newState === State.Stopped ? "Stopped" :
                        stateChangeEvent.newState === State.Starting ? "Starting" : "Running";
       
-      outputChannel.appendLine(`🔄 LSP client state changed: ${oldState} → ${newState}`);
+      logToAll(`🔄 LSP client state changed: ${oldState} → ${newState}`);
       
       if (newState === "Running") {
-        outputChannel.appendLine(`✅ LSP client successfully connected to server!`);
-        outputChannel.appendLine(`📺 "Gren LSP Server" output channel should now be visible`);
+        logToAll(`✅ LSP client successfully connected to server!`);
+        logToAll(`📺 "Gren LSP Server" output channel should now be visible`);
       } else if (newState === "Stopped") {
-        outputChannel.appendLine(`❌ LSP client stopped! Connection lost.`);
+        logToAll(`❌ LSP client stopped! Connection lost.`);
         outputChannel.show(true);
         window.showErrorMessage('Gren LSP server connection lost. Check output for errors.');
       }
@@ -278,17 +320,17 @@ export function activate(context: ExtensionContext) {
     outputChannel.appendLine(`   ${serverPath} --help`);
     
     // Start the client. This will also launch the server
-    outputChannel.appendLine(`⚡ Starting LSP client...`);
-    outputChannel.appendLine(`📋 Server command: ${serverPath} ${parseTreeArgs.join(' ')}`);
-    outputChannel.appendLine(`🌍 Environment: RUST_LOG=${rustLogLevel}, GREN_COMPILER_PATH=${grenCompilerPath}`);
+    logToAll(`⚡ Starting LSP client...`);
+    logToAll(`📋 Server command: ${serverPath} ${parseTreeArgs.join(' ')}`);
+    logToAll(`🌍 Environment: RUST_LOG=${rustLogLevel}, GREN_COMPILER_PATH=${grenCompilerPath}`);
     console.log("Gren LSP Extension: About to start LSP client");
     
     const startTime = Date.now();
     client.start().then(() => {
       const duration = Date.now() - startTime;
-      outputChannel.appendLine(`✅ Gren LSP client started successfully (${duration}ms)`);
-      outputChannel.appendLine(`📄 Check server logs at: ${logPath}`);
-      outputChannel.appendLine(`🎉 Extension is now active and ready!`);
+      logToAll(`✅ Gren LSP client started successfully (${duration}ms)`);
+      logToAll(`📄 LSP server logs are being captured to: ${fileLogger.getLogFilePath()}`);
+      logToAll(`🎉 Extension is now active and ready!`);
       console.log("Gren LSP Extension: LSP client started successfully in", duration, "ms");
       outputChannel.appendLine(`\n💡 You should now see two channels in the Output panel:`);
       outputChannel.appendLine(`  - "Gren LSP Extension" (this channel) - Extension logs`);
@@ -329,31 +371,34 @@ export function getLanguageClient(): LanguageClient | undefined {
 }
 
 export function deactivate(): Thenable<void> | undefined {
-  if (outputChannel) {
-    outputChannel.appendLine('🛑 Deactivating Gren LSP extension...');
+  if (outputChannel && fileLogger) {
+    logToAll('🛑 Deactivating Gren LSP extension...');
   }
   
   if (!client) {
-    if (outputChannel) {
-      outputChannel.appendLine('⚠️ No client to stop');
+    if (outputChannel && fileLogger) {
+      logToAll('⚠️ No client to stop');
       outputChannel.dispose();
+      closeLogger();
     }
     return undefined;
   }
   
-  if (outputChannel) {
-    outputChannel.appendLine('🔌 Stopping LSP client...');
+  if (outputChannel && fileLogger) {
+    logToAll('🔌 Stopping LSP client...');
   }
   
   return client.stop().then(() => {
-    if (outputChannel) {
-      outputChannel.appendLine('✅ LSP client stopped successfully');
+    if (outputChannel && fileLogger) {
+      logToAll('✅ LSP client stopped successfully');
       outputChannel.dispose();
+      closeLogger();
     }
   }).catch(err => {
-    if (outputChannel) {
-      outputChannel.appendLine(`❌ Error stopping LSP client: ${err.message}`);
+    if (outputChannel && fileLogger) {
+      logToAll(`❌ Error stopping LSP client: ${err.message}`);
       outputChannel.dispose();
+      closeLogger();
     }
     throw err;
   });

@@ -41,25 +41,25 @@ impl FindReferencesEngine {
         // Step 1: Find the symbol at the cursor position
         let symbol_at_cursor = match self.find_symbol_at_position(uri, position, document_content).await? {
             Some(symbol) => {
-                eprintln!("✅ Symbol found at cursor: '{}' of kind {:?}", symbol.name, symbol.kind);
+                debug!("✅ Symbol found at cursor: '{}' of kind {:?}", symbol.name, symbol.kind);
                 symbol
             },
             None => {
-                eprintln!("❌ No symbol found at position {:?} in {}", position, uri);
+                debug!("❌ No symbol found at position {:?} in {}", position, uri);
                 return Ok(None);
             }
         };
 
-        eprintln!("🔍 Found symbol at cursor: '{}' of kind {:?}", symbol_at_cursor.name, symbol_at_cursor.kind);
+        debug!("🔍 Found symbol at cursor: '{}' of kind {:?}", symbol_at_cursor.name, symbol_at_cursor.kind);
 
         // Step 2: Find all references to this symbol across the workspace
         let references = self.find_all_references_to_symbol(&symbol_at_cursor, include_declaration).await?;
 
         if references.is_empty() {
-            eprintln!("❌ No references found for symbol '{}'", symbol_at_cursor.name);
+            debug!("❌ No references found for symbol '{}'", symbol_at_cursor.name);
             Ok(None)
         } else {
-            eprintln!("✅ Found {} references for symbol '{}'", references.len(), symbol_at_cursor.name);
+            debug!("✅ Found {} references for symbol '{}'", references.len(), symbol_at_cursor.name);
             Ok(Some(references))
         }
     }
@@ -81,23 +81,23 @@ impl FindReferencesEngine {
 
         // Convert LSP position to byte offset
         let byte_offset = position_to_byte_offset(document_content, position)?;
-        eprintln!("🔍 Position {:?} converted to byte offset: {}", position, byte_offset);
+        debug!("🔍 Position {:?} converted to byte offset: {}", position, byte_offset);
         
         // Find the node at the cursor position
         let root = tree.root_node();
         let node_at_cursor = root.descendant_for_byte_range(byte_offset, byte_offset)
             .ok_or_else(|| anyhow!("No node found at position"))?;
-        eprintln!("🔍 Node at cursor: '{}' (kind: {})", get_node_text(node_at_cursor, document_content), node_at_cursor.kind());
+        debug!("🔍 Node at cursor: '{}' (kind: {})", get_node_text(node_at_cursor, document_content), node_at_cursor.kind());
 
         // Find the identifier node (could be parent or self)
         let identifier_node = self.find_identifier_node(node_at_cursor)?;
         let symbol_name = get_node_text(identifier_node, document_content);
 
-        eprintln!("🔍 Symbol name at cursor: '{}' (identifier node kind: {})", symbol_name, identifier_node.kind());
+        debug!("🔍 Symbol name at cursor: '{}' (identifier node kind: {})", symbol_name, identifier_node.kind());
 
         // Look up the symbol in the symbol index
         let available_symbols = self.symbol_index.find_available_symbols(uri, &symbol_name).await?;
-        eprintln!("🔍 Found {} available symbols for '{}'", available_symbols.len(), symbol_name);
+        debug!("🔍 Found {} available symbols for '{}'", available_symbols.len(), symbol_name);
         
         // Return the first matching symbol (in Gren, symbols should be unambiguous)
         Ok(available_symbols.into_iter().next())
@@ -111,33 +111,33 @@ impl FindReferencesEngine {
     ) -> Result<Vec<Location>> {
         // Find all references to this symbol across the workspace
         let references = self.symbol_index.find_references(&symbol.name).await?;
-        eprintln!("🔍 Database returned {} references for symbol '{}'", references.len(), symbol.name);
+        debug!("🔍 Database returned {} references for symbol '{}'", references.len(), symbol.name);
         let mut all_references = Vec::new();
 
         for reference in &references {
-            eprintln!("🔍 Raw reference: name='{}', kind='{}', uri='{}', range={}:{}-{}:{}", 
+            debug!("🔍 Raw reference: name='{}', kind='{}', uri='{}', range={}:{}-{}:{}", 
                      reference.symbol_name, reference.reference_kind, reference.uri,
                      reference.range_start_line, reference.range_start_char,
                      reference.range_end_line, reference.range_end_char);
             
             // Skip declarations if not requested
             if !include_declaration && (reference.reference_kind == "declaration" || reference.reference_kind == "definition") {
-                eprintln!("🔍 Skipping declaration/definition because include_declaration=false");
+                debug!("🔍 Skipping declaration/definition because include_declaration=false");
                 continue;
             }
 
             match reference.to_location() {
                 Ok(location) => {
-                    eprintln!("🔍 Adding location: {}:{}-{}:{}", 
+                    debug!("🔍 Adding location: {}:{}-{}:{}", 
                              location.range.start.line, location.range.start.character,
                              location.range.end.line, location.range.end.character);
                     all_references.push(location);
                 },
-                Err(e) => eprintln!("Failed to convert reference to location: {}", e),
+                Err(e) => debug!("Failed to convert reference to location: {}", e),
             }
         }
 
-        eprintln!("🔍 Final result: {} references for symbol '{}' (include_declaration: {})", 
+        debug!("🔍 Final result: {} references for symbol '{}' (include_declaration: {})", 
                all_references.len(), symbol.name, include_declaration);
 
         Ok(all_references)

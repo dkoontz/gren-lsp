@@ -189,7 +189,7 @@ brokenFunction input =
           await monitor.waitForMethod('textDocument/didOpen');
           
           // Wait for diagnostics processing
-          await new Promise(resolve => setTimeout(resolve, 3000));
+          await monitor.waitForDiagnostics(testUri);
           
           // Check VS Code diagnostics panel
           const diagnostics = vscode.languages.getDiagnostics(testUri);
@@ -247,7 +247,7 @@ greet name =
           await monitor.waitForMethod('textDocument/didOpen');
           
           // Basic validation that tree-sitter parsing is working through LSP
-          await new Promise(resolve => setTimeout(resolve, 2000));
+          // Tree-sitter parsing is immediate, no delay needed
           const diagnostics = vscode.languages.getDiagnostics(testUri);
           
           // Tree-sitter integration working if we can parse without major issues
@@ -307,7 +307,7 @@ add x y =
           await monitor.waitForMethod('textDocument/didOpen');
           
           // Wait for indexing to complete
-          await new Promise(resolve => setTimeout(resolve, 3000));
+          await monitor.waitForSymbolIndexing(testUri);
           
           // Test that symbols are indexed by requesting document symbols
           const symbols = await vscode.commands.executeCommand<vscode.DocumentSymbol[]>(
@@ -697,7 +697,11 @@ brokenFunction input =
           await monitor.waitForMethod('textDocument/didOpen');
           
           // Wait for diagnostics
-          await new Promise(resolve => setTimeout(resolve, 3000));
+          try {
+            await monitor.waitForDiagnostics(testUri);
+          } catch (error) {
+            // No diagnostics available - this is expected for code actions test
+          }
           
           const diagnostics = vscode.languages.getDiagnostics(testUri);
           
@@ -748,7 +752,7 @@ uniqueWorkspaceFunction input =
           await monitor.waitForMethod('textDocument/didOpen');
           
           // Wait for indexing
-          await new Promise(resolve => setTimeout(resolve, 3000));
+          await monitor.waitForSymbolIndexing(testUri);
           
           // Request workspace symbols
           const workspaceSymbols = await vscode.commands.executeCommand<vscode.SymbolInformation[]>(

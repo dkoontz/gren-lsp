@@ -141,6 +141,22 @@ impl TempWorkspace {
             return Err(anyhow!("Source project missing gren.json at {:?}", source_gren_json));
         }
 
+        // Copy gren_packages directory if it exists (downloaded dependencies)
+        let source_packages = source.join("gren_packages");
+        let dest_packages = dest.join("gren_packages");
+        if fs::metadata(&source_packages).await.is_ok() {
+            Self::copy_directory_recursive(&source_packages, &dest_packages).await?;
+            debug!("Copied gren_packages directory to temporary workspace");
+        }
+
+        // Copy .gren directory if it exists (compiler cache/build artifacts)
+        let source_gren_dir = source.join(".gren");
+        let dest_gren_dir = dest.join(".gren");
+        if fs::metadata(&source_gren_dir).await.is_ok() {
+            Self::copy_directory_recursive(&source_gren_dir, &dest_gren_dir).await?;
+            debug!("Copied .gren directory to temporary workspace");
+        }
+
         // Create src directory structure
         let src_dir = dest.join("src");
         fs::create_dir_all(&src_dir).await
@@ -210,6 +226,36 @@ impl TempWorkspace {
             debug!("Wrote in-memory document {:?} to temporary workspace", relative_path);
         }
         Ok(())
+    }
+
+    /// Recursively copy a directory and all its contents
+    fn copy_directory_recursive<'a>(source: &'a Path, dest: &'a Path) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            // Create destination directory
+            fs::create_dir_all(dest).await
+                .map_err(|e| anyhow!("Failed to create directory {:?}: {}", dest, e))?;
+
+            let mut entries = fs::read_dir(source).await
+                .map_err(|e| anyhow!("Failed to read directory {:?}: {}", source, e))?;
+
+            while let Some(entry) = entries.next_entry().await
+                .map_err(|e| anyhow!("Failed to read directory entry: {}", e))? {
+                let entry_path = entry.path();
+                let file_name = entry.file_name();
+                let dest_path = dest.join(&file_name);
+
+                if entry_path.is_dir() {
+                    // Recursively copy subdirectory
+                    Self::copy_directory_recursive(&entry_path, &dest_path).await?;
+                } else {
+                    // Copy file
+                    fs::copy(&entry_path, &dest_path).await
+                        .map_err(|e| anyhow!("Failed to copy file {:?} to {:?}: {}", entry_path, dest_path, e))?;
+                }
+            }
+
+            Ok(())
+        })
     }
 
     /// Get the workspace path
@@ -342,11 +388,20 @@ impl GrenCompiler {
         let success = output.status.success();
         let exit_code = output.status.code();
 
+        // Determine the output to use for diagnostic parsing
+        // When using --report=json, Gren compiler outputs JSON errors to stderr, not stdout
+        let diagnostic_output = if stdout.trim().is_empty() && !stderr.trim().is_empty() {
+            debug!("Using stderr for diagnostic output (stdout was empty)");
+            stderr.clone()
+        } else {
+            stdout.clone()
+        };
+
         if success {
             info!("Module '{}' compiled successfully in {:?}", request.module_name, compile_time);
         } else {
             warn!("Module '{}' compilation failed with exit code {:?}. Output: {}", 
-                  request.module_name, exit_code, stdout);
+                  request.module_name, exit_code, diagnostic_output);
         }
 
         // Temporary workspace automatically cleaned up when dropped
@@ -356,7 +411,7 @@ impl GrenCompiler {
 
         Ok(CompileResult {
             success,
-            output: stdout,
+            output: diagnostic_output,
             stderr,
             exit_code,
         })

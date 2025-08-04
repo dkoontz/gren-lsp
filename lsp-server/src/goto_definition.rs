@@ -99,7 +99,7 @@ impl GotoDefinitionEngine {
         let symbol_name = get_node_text(symbol_node, document_content);
         debug!("Looking for definition of symbol: '{}'", symbol_name);
 
-        // Strategy 1: Look for the symbol in the symbol index (cross-module and local definitions)
+        // Strategy 1: Look for the symbol in the symbol index (cross-module and local definitions)  
         let symbols = self.symbol_index.find_symbols_by_name(&symbol_name).await?;
         
         if let Some(definition) = self.find_best_definition(&symbols, file_uri).await? {
