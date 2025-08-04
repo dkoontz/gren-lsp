@@ -9,6 +9,8 @@ use url::Url;
 use crate::symbol_index::{Symbol, SymbolIndex, i32_to_symbol_kind};
 use crate::scope_analysis::{ScopeAnalysis, LocalVariable};
 use crate::tree_sitter_queries::GrenQueryEngine;
+use crate::import_completion::ImportCompletionEngine;
+use crate::import_manager::ImportManager;
 
 /// Code completion engine for Gren language
 pub struct CompletionEngine {
@@ -18,6 +20,8 @@ pub struct CompletionEngine {
     query_engine: GrenQueryEngine,
     /// Scope analysis for local variables
     scope_analysis: Arc<RwLock<ScopeAnalysis>>,
+    /// Import completion engine for automatic imports (optional)
+    import_completion: Option<Arc<ImportCompletionEngine>>,
 }
 
 /// Context information for completion requests
@@ -62,6 +66,25 @@ impl CompletionEngine {
             symbol_index,
             query_engine,
             scope_analysis: Arc::new(RwLock::new(scope_analysis)),
+            import_completion: None,
+        })
+    }
+
+    /// Create a new completion engine with import completion enabled
+    pub fn new_with_import_completion(symbol_index: SymbolIndex) -> Result<Self> {
+        let query_engine = GrenQueryEngine::new()?;
+        let scope_analysis = ScopeAnalysis::new()?;
+        
+        // Create import manager and import completion engine
+        let import_manager = Arc::new(ImportManager::new()?);
+        let symbol_index_arc = Arc::new(RwLock::new(Some(symbol_index.clone())));
+        let import_completion = Arc::new(ImportCompletionEngine::new(symbol_index_arc, import_manager));
+
+        Ok(Self {
+            symbol_index,
+            query_engine,
+            scope_analysis: Arc::new(RwLock::new(scope_analysis)),
+            import_completion: Some(import_completion),
         })
     }
 
@@ -242,6 +265,14 @@ impl CompletionEngine {
             if symbol.name.starts_with(prefix) {
                 let completion_item = self.symbol_to_completion_item(&symbol, &context.uri);
                 items.push(completion_item);
+            }
+        }
+
+        // Add unimported symbols with automatic import completion (if enabled)
+        if let Some(ref import_completion) = self.import_completion {
+            let import_items = import_completion.complete_unimported_symbols(context).await?;
+            for import_item in import_items {
+                items.push(import_item.completion_item);
             }
         }
 

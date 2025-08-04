@@ -76,6 +76,14 @@ The LSP spec is available in the `docs/lsp-spec/3.18` folder. The documentation 
 - Async processing to prevent editor blocking
 - Incremental parsing with tree-sitter for efficiency
 
+### Debugging and Logging
+- **VS Code Extension Debug Log**: The VS Code extension automatically creates a debug log file that captures both extension and LSP server output
+  - **Location**: `{OS_TEMP_DIR}/gren-lsp/debug.log` (e.g., `/tmp/gren-lsp/debug.log` on macOS/Linux, `%TEMP%\gren-lsp\debug.log` on Windows)
+  - **Content**: Contains timestamped logs from both the VS Code extension and LSP server with source prefixes `[Extension]` and `[LSP Server]`
+  - **Lifecycle**: Log file is cleared on each extension activation to prevent accumulation
+  - **Access**: File path is displayed in VS Code's "Gren LSP" output channel when the extension starts
+  - **Usage**: Use this file for debugging LSP communication issues, server startup problems, and protocol message tracing
+
 ## Current Project Status
 
 ### Completed Epics

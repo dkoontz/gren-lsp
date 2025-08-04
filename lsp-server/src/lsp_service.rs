@@ -137,9 +137,9 @@ impl GrenLspService {
                 info!("Symbol index initialized successfully");
                 
                 // Initialize completion engine
-                match CompletionEngine::new(symbol_index.clone()) {
+                match CompletionEngine::new_with_import_completion(symbol_index.clone()) {
                     Ok(completion_engine) => {
-                        info!("Completion engine initialized successfully");
+                        info!("Completion engine with import completion initialized successfully");
                         *self.completion_engine.write().await = Some(completion_engine);
                     }
                     Err(e) => {

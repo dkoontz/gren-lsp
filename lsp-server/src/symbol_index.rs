@@ -408,6 +408,30 @@ impl SymbolIndex {
         Ok(symbols)
     }
 
+    /// Find all workspace symbols by prefix (for import completion)
+    /// This returns symbols from all modules, regardless of import status
+    pub async fn find_workspace_symbols_by_prefix(&self, prefix: &str, limit: i32) -> Result<Vec<Symbol>> {
+        let pattern = format!("{}%", prefix);
+        let symbols = sqlx::query_as::<_, Symbol>(
+            r#"
+            SELECT * FROM symbols 
+            WHERE name LIKE ?1 
+            AND container IS NOT NULL 
+            AND container != ''
+            ORDER BY container, name 
+            LIMIT ?2
+            "#
+        )
+        .bind(pattern)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| anyhow!("Failed to query workspace symbols by prefix '{}': {}", prefix, e))?;
+
+        debug!("Found {} workspace symbols matching prefix '{}'", symbols.len(), prefix);
+        Ok(symbols)
+    }
+
     /// Find symbols in a specific file
     pub async fn find_symbols_in_file(&self, uri: &Url) -> Result<Vec<Symbol>> {
         let symbols = sqlx::query_as::<_, Symbol>(
@@ -709,7 +733,7 @@ impl SymbolIndex {
     }
     
     /// Get all imports for a specific file
-    async fn get_imports_for_file(&self, file_uri: &Url) -> Result<Vec<ImportInfo>> {
+    pub async fn get_imports_for_file(&self, file_uri: &Url) -> Result<Vec<ImportInfo>> {
         let imports = sqlx::query_as::<_, ImportInfo>(
             "SELECT * FROM imports WHERE source_uri = ?1"
         )

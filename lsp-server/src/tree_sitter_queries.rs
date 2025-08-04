@@ -592,6 +592,11 @@ pub struct ImportInfo {
 }
 
 impl ImportInfo {
+    /// Get imported symbols as a vector  
+    pub fn get_imported_symbols(&self) -> Vec<String> {
+        self.imported_symbols.clone().unwrap_or_default()
+    }
+
     pub fn new(
         source_uri: &Url,
         imported_module: String,

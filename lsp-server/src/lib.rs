@@ -18,6 +18,8 @@ pub mod performance;
 pub mod module_rename;
 pub mod file_operations;
 pub mod import_rewriter;
+pub mod import_manager;
+pub mod import_completion;
 pub mod workspace_protocol;
 
 #[cfg(test)]
@@ -49,3 +51,6 @@ mod rename_comprehensive_tests;
 
 #[cfg(test)]
 mod module_rename_integration_tests;
+
+#[cfg(test)]
+mod import_completion_integration_tests;

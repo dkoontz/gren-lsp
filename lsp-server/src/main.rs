@@ -23,6 +23,8 @@ mod performance;
 mod module_rename;
 mod file_operations;
 mod import_rewriter;
+mod import_manager;
+mod import_completion;
 mod workspace_protocol;
 
 use lsp_service::GrenLspService;
