@@ -1,0 +1,40 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun",
+            "args": ["/Users/david/dev/gren-lsp/agents/preToolHook.ts"],
+            "description": "Pre-tool hook - acquires file locks before tool execution"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun",
+            "args": ["/Users/david/dev/gren-lsp/agents/postToolHook.ts"],
+            "description": "Post-tool hook - releases file locks after tool execution"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun",
+            "args": ["/Users/david/dev/gren-lsp/agents/onAgentComplete.ts"],
+            "description": "Agent completion handler - marks agent as idle and notifies orchestrator"
+          }
+        ]
+      }
+    ]
+  }
+}

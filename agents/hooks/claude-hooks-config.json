@@ -1,0 +1,40 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun",
+            "args": ["$CLAUDE_PROJECT_DIR/agents/hooks/preToolHook.ts"],
+            "description": "Pre-tool hook - acquires file locks before tool execution"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun",
+            "args": ["$CLAUDE_PROJECT_DIR/agents/hooks/postToolHook.ts"],
+            "description": "Post-tool hook - releases file locks after tool execution"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun",
+            "args": ["$CLAUDE_PROJECT_DIR/agents/hooks/onAgentComplete.ts"],
+            "description": "Agent completion handler - marks agent as idle and notifies orchestrator"
+          }
+        ]
+      }
+    ]
+  }
+}

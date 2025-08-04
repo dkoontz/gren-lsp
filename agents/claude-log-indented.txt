@@ -1,0 +1,119 @@
+Found conversation file: /Users/david/.claude/projects/-Users-david-dev-gren-lsp-agents/362f6106-d6a8-4b38-a275-7cd62809247e.jsonl
+Retrieving last 10 messages...
+================================================================================
+[1] 2025-08-05T00:43:31.979Z | assistant: Excellent! The output shows that our type-safe approach is working perfectly:
+    
+    1. **Line 53**: `assistant: Now let's test it again:` - Correctly classified as assistant message
+    2. **Line 55**: `Bash(command: "bun getAgentHistory.ts...", description: "Test the fixed...")` - Correctly classified as tool call
+    3. **Line 57**: `[TOOL RESULT] Found conversation file: ...` - Correctly classified as tool result
+    
+    The issue you mentioned earlier about "restart" behavior appears to be resolved. Our implementation now uses **only structural detection**:
+    
+    1. **Message type detection**: Based on `jsonObj.type === "user"` vs `jsonObj.type === "assistant"`
+    2. **Tool result detection**: Based on `item.type === "tool_result"` in the content array
+    3. **Tool use detection**: Based on `item.type === "tool_use"` in the content array
+    4. **Text message detection**: Based on `item.type === "text"` in the content array
+    
+    There is **zero text matching** for message classification - everything is based on the definitive JSON structure provided by Claude Code. This eliminates any possibility of false positives where script output could be misclassified as tool results.
+    
+    The discriminated union types ensure that TypeScript catches any attempts to access properties that don't exist on specific message types, making the code completely type-safe.
+
+[2] 2025-08-05T00:46:42.930Z | user: to make it easier to understand what is part of a message I want to indent the content of each message by 4 spaces when it is multi-line
+    
+    ```
+    [20] 2025-08-05T00:39:43.438Z | assistant: Perfect! The error is now fixed and we can see the proper type-safe formatting working:
+    
+    1. **Assistant messages**: `assistant: content`
+    2. **Tool calls**: `ToolName(arguments)` format (like `Edit(...)` and `Bash(...)`)
+    3. **Tool results**: `[TOOL RESULT] content`
+    
+    The key fix was recognizing that `ProcessedToolUseMessage` has a different structure from the other message types - it has `toolName` and `arguments` properties instead of a `content` property. By using block scopes in the switch statement (`case "user": { ... }`), TypeScript can properly narrow the types and access the correct properties for each message type.
+    
+    The discriminated union approach is now working correctly:
+    
+    - **Type safety**: Each message type has its own structure and properties
+    - **No string matching**: Uses definitive JSON structure fields 
+    - **Proper formatting**: Each message type is formatted according to its specific properties
+    - **No false positives**: No more "restart" behavior from misclassified messages
+    
+    This implementation should completely resolve the issues you were seeing with message classification and the log "restart" behavior.
+    
+    ```
+    would become
+    ```
+    [20] 2025-08-05T00:39:43.438Z | assistant: Perfect! The error is now fixed and we can see the proper type-safe formatting working:
+        
+        1. **Assistant messages**: `assistant: content`
+        2. **Tool calls**: `ToolName(arguments)` format (like `Edit(...)` and `Bash(...)`)
+        3. **Tool results**: `[TOOL RESULT] content`
+        
+        The key fix was recognizing that `ProcessedToolUseMessage` has a different structure from the other message types - it has `toolName` and `arguments` properties instead of a `content` property. By using block scopes in the switch statement (`case "user": { ... }`), TypeScript can properly narrow the types and access the ...
+
+[3] 2025-08-05T00:46:46.208Z | assistant: Great idea! That will make multi-line messages much easier to read. Let me update the formatter to indent continuation lines by 4 spaces:
+
+[4] 2025-08-05T00:46:54.767Z | Edit(file_path: "/Users/david/dev/gren-lsp/agents/utils.ts", old_string: "export function formatProcessedMessage(message: ProcessedMessage): string {\n  const timestamp = new Date(message.timestamp).toISOString();\n  \n  // Use discriminated union for type-safe formatting\n  switch (message.messageType) {\n    case \"user\": {\n      let content = message.content || \"\";\n      if (content.length > 2000) {\n        content = content.substring(0, 2000) + \"...\";\n      }\n      return `[${message.index + 1}] ${timestamp} | user: ${content}`;\n    }\n      \n    case \"assistant\": {\n      let content = message.content || \"\";\n      if (content.length > 2000) {\n        content = content.substring(0, 2000) + \"...\";\n      }\n      return `[${message.index + 1}] ${timestamp} | assistant: ${content}`;\n    }\n      \n    case \"tool_use\":\n      return `[${message.index + 1}] ${timestamp} | ${message.toolName}(${message.arguments})`;\n      \n    case \"tool_result\": {\n      let content = message.content || \"\";\n      if (content.length > 2000) {\n        content = content.substring(0, 2000) + \"...\";\n      }\n      return `[${message.index + 1}] ${timestamp} | [TOOL RESULT] ${content}`;\n    }\n      \n    default:\n      // This should never happen with proper discriminated unions\n      const exhaustiveCheck: never = message;\n      return `[${message.index + 1}] ${timestamp} | unknown: ${JSON.stringify(exhaustiveCheck)}`;\n  }\n}", new_string: "function indentMultilineContent(content: string): string {\n  const lines = content.split('\\n');\n  if (lines.length <= 1) {\n    return content;\n  }\n  \n  // First line stays as-is, subsequent lines get 4-space indent\n  return lines[0] + '\\n' + lines.slice(1).map(line => '    ' + line).join('\\n');\n}\n\nexport function formatProcessedMessage(message: ProcessedMessage): string {\n  const timestamp = new Date(message.timestamp).toISOString();\n  \n  // Use discriminated union for type-safe formatting\n  switch (message.messageType) {\n    case \"user\": {\n      let content = message.content || \"\";\n      if (content.length > 2000) {\n        content = content.substring(0, 2000) + \"...\";\n      }\n      const formattedContent = indentMultilineContent(content);\n      return `[${message.index + 1}] ${timestamp} | user: ${formattedContent}`;\n    }\n      \n    case \"assistant\": {\n      let content = message.content || \"\";\n      if (content.length > 2000) {\n        content = content.substring(0, 2000) + \"...\";\n      }\n      const formattedContent = indentMultilineContent(content);\n      return `[${message.index + 1}] ${timestamp} | assistant: ${formattedContent}`;\n    }\n      \n    case \"tool_use\":\n      return `[${message.index + 1}] ${timestamp} | ${message.toolName}(${message.arguments})`;\n      \n    case \"tool_result\": {\n      let content = message.content || \"\";\n      if (content.length > 2000) {\n        content = content.substring(0, 2000) + \"...\";\n      }\n      const formattedContent = indentMultilineContent(content);\n      return `[${message.index + 1}] ${timestamp} | [TOOL RESULT] ${formattedContent}`;\n    }\n      \n    default:\n      // This should never happen with proper discriminated unions\n      const exhaustiveCheck: never = message;\n      return `[${message.index + 1}] ${timestamp} | unknown: ${JSON.stringify(exhaustiveCheck)}`;\n  }\n}")
+
+[5] 2025-08-05T00:46:54.804Z | [TOOL RESULT] The file /Users/david/dev/gren-lsp/agents/utils.ts has been updated. Here's the result of running `cat -n` on a snippet of the edited file:
+       306→    totalMessages: processedMessages.length
+       307→  };
+       308→}
+       309→
+       310→function indentMultilineContent(content: string): string {
+       311→  const lines = content.split('\n');
+       312→  if (lines.length <= 1) {
+       313→    return content;
+       314→  }
+       315→  
+       316→  // First line stays as-is, subsequent lines get 4-space indent
+       317→  return lines[0] + '\n' + lines.slice(1).map(line => '    ' + line).join('\n');
+       318→}
+       319→
+       320→export function formatProcessedMessage(message: ProcessedMessage): string {
+       321→  const timestamp = new Date(message.timestamp).toISOString();
+       322→  
+       323→  // Use discriminated union for type-safe formatting
+       324→  switch (message.messageType) {
+       325→    case "user": {
+       326→      let content = message.content || "";
+       327→      if (content.length > 2000) {
+       328→        content = content.substring(0, 2000) + "...";
+       329→      }
+       330→      const formattedContent = indentMultilineContent(content);
+       331→      return `[${message.index + 1}] ${timestamp} | user: ${formattedContent}`;
+       332→    }
+       333→      
+       334→    case "assistant": {
+       335→      let content = message.content || "";
+       336→      if (content.length > 2000) {
+       337→        content = content.substring(0, 2000) + "...";
+       338→      }
+       339→      const formattedContent = indentMultilineContent(content);
+       340→      return `[${message.index + 1}] ${timestamp} | assistant: ${formattedContent}`;
+       341→    }
+       342→      
+       343→    case "tool_use":
+       344→      return `[${message.index + 1}] ${timestamp} | ${message.toolName}(${message.arguments})`;
+       345→      
+       346→    case "tool_result": {
+       347→      let content = message.content || "";
+       348→      if (content.length > 2000) {
+       349→        content = content.substring(0, 2000) + "...";
+       350→      }
+       351→      const formattedConte...
+
+[6] 2025-08-05T00:46:57.709Z | assistant: Now let's test the updated formatting:
+
+[7] 2025-08-05T00:46:59.051Z | Bash(command: "bun getAgentHistory.ts 362f6106-d6a8-4b38-a275-7cd62809247e 5", description: "Test the updated formatting with indented multi-line content")
+
+[8] 2025-08-05T00:46:59.207Z | [TOOL RESULT] Found conversation file: /Users/david/.claude/projects/-Users-david-dev-gren-lsp-agents/362f6106-d6a8-4b38-a275-7cd62809247e.jsonl
+    Retrieving last 5 messages...
+    ================================================================================
+    [1] 2025-08-05T00:46:46.208Z | assistant: Great idea! That will make multi-line messages much easier to read. Let me update the formatter to indent continuation lines by 4 spaces:
+    
+    [2] 2025-08-05T00:46:54.767Z | Edit(file_path: "/Users/david/dev/gren-lsp/agents/utils.ts", old_string: "export function formatProcessedMessage(message: ProcessedMessage): string {\n  const timestamp = new Date(message.timestamp).toISOString();\n  \n  // Use discriminated union for type-safe formatting\n  switch (message.messageType) {\n    case \"user\": {\n      let content = message.content || \"\";\n      if (content.length > 2000) {\n        content = content.substring(0, 2000) + \"...\";\n      }\n      return `[${message.index + 1}] ${timestamp} | user: ${content}`;\n    }\n      \n    case \"assistant\": {\n      let content = message.content || \"\";\n      if (content.length > 2000) {\n        content = content.substring(0, 2000) + \"...\";\n      }\n      return `[${message.index + 1}] ${timestamp} | assistant: ${content}`;\n    }\n      \n    case \"tool_use\":\n      return `[${message.index + 1}] ${timestamp} | ${message.toolName}(${message.arguments})`;\n      \n    case \"tool_result\": {\n      let content = message.content || \"\";\n      if (content.length > 2000) {\n        content = content.substring(0, 2000) + \"...\";\n      }\n      return `[${message.index + 1}] ${timestamp} | [TOOL RESULT] ${content}`;\n    }\n      \n    default:\n      // This should never happen with proper discriminated unions\n      const exhaustiveCheck: never = message;\n      return `[${message.index + 1}] ${timestamp} | unknown: ${JSON.stringify(exhaustiveCheck)}`;\n  }\n}", new_string: "function indentMultilineContent(content: string): string {\n  c...
+
+[9] 2025-08-05T00:47:02.619Z | assistant: Perfect! The indentation is working beautifully. Look at entry [3] - the tool result content is now properly indented with 4 spaces for each continuation line, making it much easier to see where each message begins and ends.
+    
+    Let me generate a larger sample to see the full effect:
+
+[10] 2025-08-05T00:47:03.927Z | Bash(command: "bun getAgentHistory.ts 362f6106-d6a8-4b38-a275-7cd62809247e 10 > claude-log-indented.txt", description: "Generate a larger sample with indented formatting")
