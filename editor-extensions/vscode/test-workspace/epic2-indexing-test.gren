@@ -1,0 +1,24 @@
+module IndexingTest exposing (main, greet, add, Person)
+
+import Node
+
+type alias Person =
+    { name : String
+    , age : Int
+    }
+
+main : Node.Program {} {}
+main =
+    Node.defineProgram
+        { init = \_ -> ( {}, Node.none )
+        , update = \_ model -> ( model, Node.none )
+        , subscriptions = \_ -> Sub.none
+        }
+
+greet : String -> String
+greet name =
+    "Hello, " ++ name ++ "!"
+
+add : Int -> Int -> Int
+add x y =
+    x + y

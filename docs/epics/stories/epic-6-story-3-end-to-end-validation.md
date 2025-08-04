@@ -1,29 +1,30 @@
-# Epic 6 Story 3: End-to-End Validation & Performance Testing
+# Epic 6 Story 3: Production Readiness Validation & Performance Testing
 
 ## 📋 User Story
 **As a** Gren LSP developer  
-**I want** to validate complete development workflows and performance characteristics through the VS Code extension  
-**So that** I can ensure production readiness and optimal user experience before any future distribution
+**I want** to validate complete development workflows and production readiness after resolving all server-side gaps  
+**So that** I can confidently recommend the LSP server and VS Code extension for distribution or advanced feature development
 
 ## ✅ Acceptance Criteria
-- [ ] Validate complete Gren development workflows from project setup to deployment
-- [ ] Test realistic usage scenarios with authentic Gren projects
-- [ ] Measure and validate performance under production-like conditions
-- [ ] Test stability and reliability during extended development sessions
-- [ ] Validate resource usage (memory, CPU, disk) remains within acceptable bounds
-- [ ] Test concurrent user scenarios and multi-project workspaces
-- [ ] Validate error recovery and graceful degradation scenarios
-- [ ] Document production readiness assessment with recommendations
+- [ ] Validate all Epic 1-5 features work correctly after Story 2 server-side fixes (target: 90%+ success rate)
+- [ ] Test complete development workflows using the comprehensive features set
+- [ ] Validate performance remains within requirements despite server-side fixes
+- [ ] Test stability and reliability during extended development sessions with full feature usage
+- [ ] Measure resource usage with all features active and confirm acceptable bounds
+- [ ] Test advanced Epic 3-4 features now that Epic 2 foundation is solid
+- [ ] Validate error recovery and graceful degradation with complete feature set
+- [ ] Document final production readiness assessment with clear recommendations
 
 ## 🧪 Integration Test Requirements
 
-### Test: Complete Development Workflow Validation
-- [ ] **Project Setup**: Create new Gren project, verify extension activation and setup
-- [ ] **Code Development**: Write functions, types, modules with full feature usage
-- [ ] **Navigation**: Use go-to-definition, find references, symbol search extensively
-- [ ] **Refactoring**: Perform renames, code actions, structural changes
-- [ ] **Error Resolution**: Introduce and fix various error types using LSP features
-- [ ] **Project Build**: Ensure project compiles successfully throughout workflow
+### Test: Complete Development Workflow Validation (Post-Story 2 Fixes)
+- [ ] **Project Setup**: Create new Gren project, verify all LSP features activate correctly
+- [ ] **Code Development**: Write functions, types, modules using hover, completion, diagnostics
+- [ ] **Navigation**: Use go-to-definition, find references, document symbols extensively  
+- [ ] **Error Resolution**: Use diagnostics in Problems panel and code actions for fixes
+- [ ] **Refactoring**: Perform renames, code actions, workspace symbol search
+- [ ] **Advanced Features**: Test Epic 3-4 features that depend on Epic 2 foundation
+- [ ] **Project Build**: Ensure project compiles successfully with all features providing assistance
 
 ### Test: Realistic Project Scenarios
 - [ ] **Small Project** (5-10 files): Verify all features work smoothly
@@ -143,39 +144,42 @@
 - Cross-platform testing environment access
 
 ## 📊 Status
-**⏳ PENDING** - Awaits completion of Epic 6 Stories 1-2
+**⏳ PENDING** - Awaits completion of Epic 6 Story 2 (server-side gap resolution)
 
 ## 🎯 Success Metrics
-- **Workflow Completion**: 100% of defined development workflows complete successfully
-- **Performance Compliance**: All Epic 1-5 performance requirements met through extension
-- **Stability**: Zero critical failures during extended testing periods
-- **Production Readiness**: Clear "go/no-go" recommendation for future distribution
+- **Feature Success Rate**: 90%+ of Epic 1-5 features working correctly (improvement from 50% in Story 1)
+- **Workflow Completion**: Complete development workflows possible using full LSP feature set
+- **Performance Compliance**: All performance requirements met despite server-side fixes
+- **Stability**: Extended sessions stable with full feature usage
+- **Production Readiness**: Clear assessment for Epic 7 advanced features or Epic 8 distribution
 
 ## 📋 Test Scenarios
 
-### Scenario 1: New Project Development (Complete Workflow)
+### Scenario 1: New Project Development (Complete Workflow - Post Story 2 Fixes)
 ```
 Duration: 2-4 hours
 Steps:
 1. Create new Gren application project
 2. Set up basic project structure and dependencies  
-3. Implement core application logic with types and functions
-4. Use all LSP features extensively during development:
-   - Code completion for rapid development
-   - Hover information for understanding APIs
-   - Go-to-definition for navigation
-   - Find references for impact analysis
-   - Symbol search for project exploration
-   - Rename operations for refactoring
-   - Code actions for error fixing
-5. Build and validate project compiles successfully
-6. Monitor performance and resource usage throughout
+3. Implement core application logic with types and functions using ALL LSP features:
+   ✅ Code completion for rapid development (confirmed working in Story 1)
+   🔧 Hover information for understanding APIs (fixed in Story 2)
+   🔧 Go-to-definition for navigation (fixed in Story 2)
+   🔧 Diagnostics in Problems panel (fixed in Story 2)
+   🔧 Document symbols in Outline panel (fixed in Story 2)
+   ⭐ Find references for impact analysis (Epic 3 feature)
+   ⭐ Workspace symbol search for project exploration (Epic 4 feature) 
+   ⭐ Rename operations for refactoring (Epic 4 feature)
+   ⭐ Code actions for error fixing (Epic 4 feature)
+4. Build and validate project compiles successfully with LSP assistance
+5. Monitor that performance improvements from Story 1 are maintained
 
 Validation:
-- All features work smoothly without interruption
-- Performance remains within requirements
-- No errors or crashes during development
-- Final project compiles and runs correctly
+- 90%+ feature success rate (significant improvement from 50% in Story 1)
+- All Epic 2 core features working correctly after Story 2 fixes
+- Epic 3-4 advanced features functional with solid Epic 2 foundation
+- Performance remains within requirements (13ms startup, sub-100ms responses)
+- Complete development workflow achievable using LSP features
 ```
 
 ### Scenario 2: Large Project Maintenance (Performance & Scale)

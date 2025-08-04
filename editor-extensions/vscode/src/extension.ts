@@ -64,13 +64,20 @@ export function activate(context: ExtensionContext) {
   if (!serverPath) {
     // Try multiple possible locations for the server binary
     const possiblePaths = [
-      // From extension directory to workspace root
-      path.join(context.extensionPath, '..', '..', 'target', 'debug', 'gren-lsp'),
+      // From extension directory to workspace root (correct lsp-server subdirectory)
+      path.join(context.extensionPath, '..', '..', 'lsp-server', 'target', 'debug', 'gren-lsp'),
       // From extension directory to workspace root (alternative structure)
+      path.join(context.extensionPath, '..', '..', '..', 'lsp-server', 'target', 'debug', 'gren-lsp'),
+      // Absolute path if we're in the dev environment (correct location)
+      '/Users/david/dev/gren-lsp/lsp-server/target/debug/gren-lsp',
+      // Try to find in current workspace folders (correct lsp-server subdirectory)
+      ...(workspace.workspaceFolders || []).map(folder => 
+        path.join(folder.uri.fsPath, 'lsp-server', 'target', 'debug', 'gren-lsp')
+      ),
+      // Legacy paths (keep for backwards compatibility)
+      path.join(context.extensionPath, '..', '..', 'target', 'debug', 'gren-lsp'),
       path.join(context.extensionPath, '..', '..', '..', 'target', 'debug', 'gren-lsp'),
-      // Absolute path if we're in the dev environment
       '/Users/david/dev/gren-lsp/target/debug/gren-lsp',
-      // Try to find in current workspace folders
       ...(workspace.workspaceFolders || []).map(folder => 
         path.join(folder.uri.fsPath, 'target', 'debug', 'gren-lsp')
       )

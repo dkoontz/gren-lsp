@@ -1,42 +1,56 @@
-# Epic 6 Story 2: Feature Gap Analysis & Completion
+# Epic 6 Story 2: Server-Side Feature Gap Resolution
 
 ## 📋 User Story
 **As a** Gren LSP developer  
-**I want** to identify and resolve all gaps between LSP server capabilities and VS Code extension functionality  
-**So that** users can access 100% of implemented server features through the extension interface
+**I want** to resolve the specific server-side implementation gaps identified in Epic 6 Story 1 integration testing  
+**So that** all LSP features work correctly through the VS Code extension with proper server responses
 
 ## ✅ Acceptance Criteria
-- [ ] Complete gap analysis based on Epic 6 Story 1 integration test results
-- [ ] Identify all server features not properly exposed through extension
-- [ ] Prioritize gaps based on user impact and implementation complexity
-- [ ] Implement missing LSP capability advertisements in extension
-- [ ] Fix broken feature integrations identified in testing
-- [ ] Add missing VS Code UI integrations for server features
-- [ ] Validate all gap fixes through comprehensive re-testing
-- [ ] Document final feature coverage and any remaining limitations
+- [ ] Fix diagnostics publishing - compiler errors must appear in VS Code Problems panel
+- [ ] Fix symbol indexing responses - server must return indexed symbols to extension requests
+- [ ] Fix hover information responses - server must return type information and documentation
+- [ ] Fix go-to-definition responses - server must return accurate definition locations
+- [ ] Fix document symbols responses - server must return hierarchical symbol structures
+- [ ] Validate Epic 3-4 advanced features work correctly through integration
+- [ ] Ensure all fixes maintain performance requirements identified in Story 1
+- [ ] Comprehensive re-testing validates all gaps resolved without regressions
 
 ## 🧪 Integration Test Requirements
 
-### Test: Gap Identification and Classification
-- [ ] Analyze all integration test failures from Epic 6 Story 1
-- [ ] Categorize gaps: Missing capability advertisement, broken integration, UI missing
-- [ ] Document specific symptoms and reproduction steps for each gap
-- [ ] Assess impact severity (critical, high, medium, low) for each gap
-- [ ] Estimate implementation effort for each gap resolution
+### Test: Diagnostics Publishing Fix
+- [ ] Create Gren file with compiler errors (syntax, type, import errors)
+- [ ] Verify errors appear in VS Code Problems panel with correct locations
+- [ ] Test diagnostic clear when errors are fixed
+- [ ] Validate diagnostic severity levels (error, warning, info)
+- [ ] Test real-time diagnostic updates as code is edited
 
-### Test: LSP Capability Advertisement Gaps
-- [ ] Verify server advertises all implemented capabilities during initialization
-- [ ] Check that extension properly handles all server capability responses
-- [ ] Test that VS Code UI elements appear for all advertised capabilities
-- [ ] Validate capability negotiation works correctly for optional features
-- [ ] Ensure extension doesn't advertise capabilities not supported by server
+### Test: Symbol Indexing Response Fix
+- [ ] Open workspace with multiple Gren files containing various symbols
+- [ ] Verify symbol index populates correctly on workspace startup
+- [ ] Test symbol index updates when files are modified
+- [ ] Validate cross-file symbol resolution works correctly
+- [ ] Test symbol index performance with large codebases
 
-### Test: Feature Integration Gaps
-- [ ] Test command registration for all server-supported operations
-- [ ] Verify context menu items appear for applicable LSP features
-- [ ] Check that keyboard shortcuts work for standard LSP operations
-- [ ] Validate status bar and UI indicators for server state
-- [ ] Test error message propagation from server to user interface
+### Test: Hover Information Response Fix
+- [ ] Hover over function names and verify type signatures appear
+- [ ] Test hover on type definitions shows complete type information
+- [ ] Verify hover on imported symbols shows correct module source
+- [ ] Test hover on variables shows inferred or annotated types
+- [ ] Validate hover response times meet performance requirements
+
+### Test: Go-to-Definition Response Fix
+- [ ] Use F12/Ctrl+Click on function calls to navigate to definitions
+- [ ] Test go-to-definition across file boundaries
+- [ ] Verify navigation to imported symbol definitions
+- [ ] Test go-to-definition on type references
+- [ ] Validate definition locations are accurate and complete
+
+### Test: Document Symbols Response Fix
+- [ ] Open Gren files and verify Outline panel shows hierarchical symbols
+- [ ] Test symbol navigation by clicking in outline
+- [ ] Verify symbol kinds are correct (Function, Class, Variable, etc.)
+- [ ] Test document symbols update when file content changes
+- [ ] Validate nested symbol structures display correctly
 
 ### Test: Configuration and Settings Gaps
 - [ ] Verify all server configuration options exposed in extension settings
@@ -68,29 +82,31 @@
 
 ## 🔧 Technical Implementation
 
-### Gap Analysis Framework
-- Structured analysis of integration test results from Story 1
-- Gap classification system (missing, broken, incomplete, performance)
-- Impact assessment methodology (user experience, feature completeness)
-- Implementation effort estimation (hours/days per gap)
+### Server Response Gap Analysis (Based on Story 1 Results)
+- **Diagnostics Publishing**: Server has compiler integration but not publishing via LSP protocol
+- **Symbol Responses**: Server has robust symbol indexing but returning empty responses to LSP requests
+- **Hover Responses**: Server has hover engine but not returning formatted hover content
+- **Definition Responses**: Server has go-to-definition logic but not returning location information
+- **Document Symbol Responses**: Server has symbol extraction but not returning hierarchical structures
 
-### LSP Capability Management
-- Review and update client capability advertisement in extension
-- Ensure proper handling of server capability responses
-- Implement missing capability-dependent UI elements
-- Add proper feature detection and graceful degradation
+### LSP Message Handler Fixes
+- Fix `textDocument/publishDiagnostics` message publishing from compiler integration
+- Fix `textDocument/completion` response generation (working correctly per Story 1)
+- Fix `textDocument/hover` response formatting and content generation
+- Fix `textDocument/definition` location response generation
+- Fix `textDocument/documentSymbol` hierarchical structure response generation
 
-### Extension Integration Fixes
-- Add missing command registrations for server operations
-- Implement missing context menu items and keyboard shortcuts
-- Fix broken message passing between extension and server
-- Add missing status indicators and user feedback mechanisms
+### Server Infrastructure Debugging
+- Investigate symbol index query responses and ensure proper data flow
+- Validate LSP message response formatting matches protocol specification
+- Ensure asynchronous response handling doesn't drop messages
+- Debug server logging to identify where responses are being lost
 
-### Configuration System Enhancement
-- Expose all server configuration options in extension settings schema
-- Implement proper setting validation and error messaging
-- Add configuration change detection and server notification
-- Enhance default configuration for better user experience
+### Integration Validation Framework
+- Re-run Epic 6 Story 1 integration tests after each fix
+- Measure response times to ensure performance requirements maintained
+- Validate that fixes don't introduce regressions in working features
+- Test edge cases and error conditions for each fixed feature
 
 ## ⚡ Performance Requirements
 - Gap fixes should not introduce performance regressions
@@ -99,14 +115,16 @@
 - Large project handling should not be degraded by additional integrations
 
 ## ✅ Definition of Done
-- Comprehensive gap analysis completed with all issues categorized and prioritized
-- All critical and high-priority gaps resolved and tested
-- LSP capability advertisement properly aligned between server and extension
-- All server features accessible through appropriate VS Code UI elements
-- Configuration system provides complete access to server options
-- Error handling and user feedback comprehensive across all features
-- Cross-platform compatibility verified for all gap fixes
-- Re-testing confirms all fixes work correctly and no regressions introduced
+- All critical server-side gaps identified in Story 1 resolved and tested:
+  - ✅ Diagnostics appear in VS Code Problems panel
+  - ✅ Hover information displays type signatures and documentation
+  - ✅ Go-to-definition navigates to correct locations
+  - ✅ Document symbols show in VS Code Outline panel
+  - ✅ Symbol indexing responses populated correctly
+- Epic 3-4 advanced features validated working through extension integration
+- Performance requirements from Story 1 maintained (13ms startup, sub-100ms responses)
+- Comprehensive re-testing using Story 1 test suite shows significant improvement in success rate
+- No regressions introduced in working features (Code Completion, LSP Lifecycle, Document Management)
 
 ## 📁 Related Files
 - `feature-gap-analysis.md` - Detailed gap analysis from Story 1 results
@@ -122,13 +140,14 @@
 - LSP specification reference for proper capability handling
 
 ## 📊 Status
-**⏳ PENDING** - Awaits completion of Epic 6 Story 1
+**⏳ READY TO START** - Epic 6 Story 1 completed with specific server-side gaps identified
 
 ## 🎯 Success Metrics
-- **Gap Resolution**: 100% of critical gaps resolved, 90%+ of high-priority gaps resolved
-- **Feature Accessibility**: All server features accessible through extension UI
-- **User Experience**: Seamless integration with VS Code standard patterns
-- **Regression Prevention**: No existing functionality broken by gap fixes
+- **Success Rate Improvement**: From 50% (5/10 features) to 90%+ (9/10+ features) working
+- **Critical Gaps Resolved**: All Epic 2 core features (hover, go-to-definition, symbols) working
+- **User Experience**: Complete LSP feature set accessible through VS Code
+- **Performance Maintained**: 13ms startup, sub-100ms responses preserved
+- **Regression Prevention**: Code Completion and other working features remain stable
 
 ## 📋 Gap Analysis Template
 

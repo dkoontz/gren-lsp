@@ -1,0 +1,7 @@
+module SyntaxErrorTest exposing (..)
+
+-- This should cause a syntax error
+invalid syntax here ++
+    more invalid stuff
+
+main = "test"

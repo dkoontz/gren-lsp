@@ -244,11 +244,13 @@ impl GrenLspService {
 
     /// Compile a document and publish diagnostics
     async fn compile_and_publish_diagnostics(&self, uri: &Url) {
+        debug!("🔍 Starting diagnostic compilation for: {}", uri);
         let _workspace_root = self.workspace_root.read().await.clone();
         let _workspace_root = match _workspace_root {
             Some(root) => root,
             None => {
                 debug!("Cannot compile {}: workspace root not initialized", uri);
+                self.client.log_message(MessageType::ERROR, format!("🚨 DIAGNOSTIC GAP: Workspace root not initialized for {}", uri)).await;
                 return;
             }
         };
@@ -262,6 +264,7 @@ impl GrenLspService {
             Some(content) => content,
             None => {
                 debug!("Cannot compile {}: document not found", uri);
+                self.client.log_message(MessageType::ERROR, format!("🚨 DIAGNOSTIC GAP: Document not found for {}", uri)).await;
                 return;
             }
         };
@@ -280,6 +283,7 @@ impl GrenLspService {
             Ok(root) => root,
             Err(e) => {
                 debug!("Cannot find project root for {}: {}", uri, e);
+                self.client.log_message(MessageType::ERROR, format!("🚨 DIAGNOSTIC GAP: Cannot find project root for {}: {}", uri, e)).await;
                 return;
             }
         };
@@ -363,14 +367,18 @@ impl GrenLspService {
         let has_diagnostics_for_current_file = diagnostics.contains_key(uri);
 
         // Publish diagnostics for each file
+        debug!("📤 Publishing diagnostics for {} files", diagnostics.len());
         for (file_uri, file_diagnostics) in diagnostics {
+            debug!("📤 Publishing {} diagnostics for file: {}", file_diagnostics.len(), file_uri);
             self.client.publish_diagnostics(file_uri, file_diagnostics, None).await;
         }
 
         // If no diagnostics for the current file, clear its diagnostics
         if !has_diagnostics_for_current_file {
+            debug!("📤 Clearing diagnostics for file: {}", uri);
             self.client.publish_diagnostics(uri.clone(), vec![], None).await;
         }
+        debug!("✅ Diagnostic compilation completed for: {}", uri);
     }
 }
 
@@ -552,6 +560,8 @@ impl LanguageServer for GrenLspService {
             drop(doc_manager);
             
             // Trigger compilation and diagnostics for opened document
+            debug!("🚀 Triggering diagnostic compilation for opened document: {}", uri);
+            self.client.log_message(MessageType::INFO, format!("🚀 Starting diagnostic compilation for: {}", uri)).await;
             self.compile_and_publish_diagnostics(&uri).await;
             
             // Index symbols from the opened document

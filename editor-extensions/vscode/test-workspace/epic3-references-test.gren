@@ -1,0 +1,23 @@
+module ReferencesTest exposing (main, greet)
+
+import Node
+
+main : Node.Program {} {}
+main =
+    Node.defineProgram
+        { init = \_ -> ( {}, Node.none )
+        , update = \_ model -> ( model, Node.none )
+        , subscriptions = \_ -> Sub.none
+        }
+
+greet : String -> String
+greet name =
+    "Hello, " ++ name ++ "!"
+
+useGreet1 : String
+useGreet1 =
+    greet "World"
+
+useGreet2 : String
+useGreet2 =
+    greet "Universe"

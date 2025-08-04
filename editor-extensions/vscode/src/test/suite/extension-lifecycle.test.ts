@@ -17,6 +17,10 @@ suite('Extension Lifecycle & Server Management Tests', () => {
     
     // Find the LSP server binary
     const possiblePaths = [
+      path.join(__dirname, '..', '..', '..', '..', '..', 'lsp-server', 'target', 'debug', 'gren-lsp'),
+      path.join(__dirname, '..', '..', '..', '..', '..', '..', 'lsp-server', 'target', 'debug', 'gren-lsp'),
+      '/Users/david/dev/gren-lsp/lsp-server/target/debug/gren-lsp',
+      // Legacy paths for backwards compatibility
       path.join(__dirname, '..', '..', '..', '..', '..', 'target', 'debug', 'gren-lsp'),
       path.join(__dirname, '..', '..', '..', '..', '..', '..', 'target', 'debug', 'gren-lsp'),
       '/Users/david/dev/gren-lsp/target/debug/gren-lsp'
