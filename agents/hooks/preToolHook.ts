@@ -1,13 +1,12 @@
 #!/usr/bin/env bun
 import { acquireFileLock, releaseFileLock } from "../fileLocking.ts";
-import { 
-  getAgentName, 
+import {
+  getAgentName,
   extractFilePathsFromTool,
   FILE_WRITING_TOOLS,
   FILE_READING_TOOLS,
-  type ClaudeHook 
+  type ClaudeHook,
 } from "../utils.ts";
-
 
 try {
   // Read hook data from stdin

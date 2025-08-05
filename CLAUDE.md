@@ -86,19 +86,12 @@ The LSP spec is available in the `docs/lsp-spec/3.18` folder. The documentation 
 
 ## Current Project Status
 
-### Completed Epics
-- **Epic 1: Foundation & Testing** ✅ - LSP server lifecycle, document management, tree-sitter baseline
-- **Epic 2: Core Language Intelligence** ✅ - Symbol indexing, code completion, hover, go-to-definition
+**📍 For current epic progress and story status, see the canonical source:**
+- **Epic Overview & Status**: [`docs/epics/index.md`](docs/epics/index.md)
+- **Story Files**: [`docs/stories/`](docs/stories/) directory
+- **Next Story**: Use the BMad Scrum Master (`*sm`) to identify and prepare the next story
 
-### Current Epic
-- **Epic 3: Advanced Navigation & References** - In Progress
-  - Story 1: Find All References Implementation (textDocument/references)
-  - Story 2: Document Symbol Hierarchy (textDocument/documentSymbol)  
-  - Story 3: Performance Optimization & Large Project Support
-
-### Future Epics
-- **Epic 4: Polish and Enhancement** - Code actions, workspace symbols, rename
-- **Epic 5: VS Code Extension Integration** - Marketplace publication and user experience
+This approach prevents documentation drift by maintaining a single source of truth for project status and progress tracking.
 
 ## 🧪 CRITICAL: Test Projects and Data
 
